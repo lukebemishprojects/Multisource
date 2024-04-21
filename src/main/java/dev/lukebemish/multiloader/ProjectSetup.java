@@ -1,6 +1,9 @@
 package dev.lukebemish.multiloader;
 
 import groovy.lang.Closure;
+import groovy.lang.DelegatesTo;
+import groovy.transform.stc.ClosureParams;
+import groovy.transform.stc.SimpleType;
 import net.fabricmc.loom.api.LoomGradleExtensionAPI;
 import org.gradle.api.Action;
 import org.gradle.api.Project;
@@ -63,6 +66,26 @@ public class ProjectSetup {
         this.repositories.add(repositories);
     }
 
+    public void common(String name, List<String> parents,
+                       @ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.DependenciesSetup")
+                       @DelegatesTo(DependenciesSetup.class)
+                       Closure<?> dependencies
+    ) {
+        common(name, parents, ofAction(dependencies));
+    }
+
+    public void common(String name,
+                       @ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.DependenciesSetup")
+                       @DelegatesTo(DependenciesSetup.class)
+                       Closure<?> dependencies
+    ) {
+        common(name, ofAction(dependencies));
+    }
+
+    public void common(String name, Action<DependenciesSetup> dependencies) {
+        common(name, List.of(), dependencies);
+    }
+
     @SuppressWarnings("UnstableApiUsage")
     public void common(String name, List<String> parents, Action<DependenciesSetup> dependencies) {
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
@@ -71,7 +94,7 @@ public class ProjectSetup {
             setup.doAction(ProjectSetup::exposeClasspathConfigurations);
         }
         setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p.getExtensions().getByType(LoomGradleExtensionAPI.class));
+            var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
             dependencies.execute(dependenciesSetup);
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
             p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
@@ -115,16 +138,117 @@ public class ProjectSetup {
                 sourcesConfig.getOutgoing().getArtifacts().removeIf(a -> a.getBuildDependencies().getDependencies(null).contains(p.getTasks().getByName("remapSourcesJar")));
             } else {
                 var compileOnly = Constants.forFeature(name, "compileOnly");
-                var deps = p.getDependencies();
-                deps.add(compileOnly, deps.project(Map.of("path", makeKey(root, name))));
+                p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
             }
-            var runtimeModClasses = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES));
-            runtimeModClasses.setCanBeConsumed(true);
-            runtimeModClasses.setCanBeResolved(false);
-            runtimeModClasses.getOutgoing().artifacts(p.provider(set::getOutput));
+
+            exposeModClasses(name, p, set);
 
             setupParents(p, name, loaders);
         });
+    }
+
+    public void neoforge(String name, List<String> parents,
+                        @ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.NeoforgeDependenciesSetup")
+                        @DelegatesTo(NeoforgeDependenciesSetup.class)
+                        Closure<?> dependencies
+    ) {
+        neoforge(name, parents, ofAction(dependencies));
+    }
+
+    @SuppressWarnings("UnstableApiUsage")
+    public void neoforge(String name, List<String> parents, Action<NeoforgeDependenciesSetup> dependencies) {
+        if (name.equals("main")) {
+            throw new IllegalArgumentException("Main source set cannot be fabric");
+        }
+        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.setPlatform("fabric");
+        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
+        setup.doAction(p -> {
+            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
+            setupSubprojectConsumer(p, name, root, loom);
+        });
+        setup.doAction(p -> {
+            var dependenciesSetup = p.getObjects().newInstance(NeoforgeDependenciesSetup.class, p);
+            dependencies.execute(dependenciesSetup);
+            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
+            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
+            p.getConfigurations().maybeCreate("neoforge").fromDependencyCollector(dependenciesSetup.getNeoforge());
+        });
+
+        var loader = loaders.computeIfAbsent(name, LoaderSet::new);
+        parents.forEach(loader::parent);
+
+        rootActions.add(p -> {
+            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
+            var set = sourceSets.maybeCreate(name);
+
+            var compileOnly = Constants.forFeature(name, "compileOnly");
+            p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
+            exposeModClasses(name, p, set);
+
+            exposeRuntimeToSubproject(name, p);
+
+            setupParents(p, name, loaders);
+        });
+    }
+
+    @SuppressWarnings("UnstableApiUsage")
+    public void fabric(String name, List<String> parents, Action<FabricDependenciesSetup> dependencies) {
+        if (name.equals("main")) {
+            throw new IllegalArgumentException("Main source set cannot be fabric");
+        }
+        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.setPlatform("fabric");
+        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
+        setup.doAction(p -> {
+            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
+            setupSubprojectConsumer(p, name, root, loom);
+        });
+        setup.doAction(p -> {
+            var dependenciesSetup = p.getObjects().newInstance(FabricDependenciesSetup.class, p);
+            dependencies.execute(dependenciesSetup);
+            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
+            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
+            p.getConfigurations().maybeCreate("modCompileOnly").fromDependencyCollector(dependenciesSetup.getLoader());
+        });
+
+        var loader = loaders.computeIfAbsent(name, LoaderSet::new);
+        parents.forEach(loader::parent);
+
+        rootActions.add(p -> {
+            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
+            var set = sourceSets.maybeCreate(name);
+
+            var compileOnly = Constants.forFeature(name, "compileOnly");
+            var dep = (ModuleDependency) p.getDependencies().project(Map.of("path", makeKey(root, name)));
+            dep.exclude(Map.of("group", "net.fabricmc", "module", "fabric-loader"));
+            p.getDependencies().add(compileOnly, dep);
+            exposeModClasses(name, p, set);
+
+            exposeRuntimeToSubproject(name, p);
+
+            setupParents(p, name, loaders);
+
+            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
+            loom.createRemapConfigurations(set);
+        });
+
+        // TODO: set up remap
+    }
+
+    public void fabric(String name, List<String> parents,
+                       @ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.FabricDependenciesSetup")
+                       @DelegatesTo(FabricDependenciesSetup.class)
+                       Closure<?> dependencies
+    ) {
+        fabric(name, parents, ofAction(dependencies));
+    }
+
+    private static void exposeModClasses(String name, Project p, SourceSet set) {
+        var runtimeModClasses = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES));
+        runtimeModClasses.setCanBeConsumed(true);
+        runtimeModClasses.setCanBeResolved(false);
+        runtimeModClasses.getOutgoing().artifacts(p.provider(set::getOutput));
     }
 
     private static void setupParents(Project p, String name, Map<String, LoaderSet> loaders) {
@@ -187,97 +311,11 @@ public class ProjectSetup {
         }
     }
 
-    @SuppressWarnings("UnstableApiUsage")
-    public void fabric(String name, List<String> parents, Action<FabricDependenciesSetup> dependencies) {
-        if (name.equals("main")) {
-            throw new IllegalArgumentException("Main source set cannot be fabric");
-        }
-        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
-        setup.setPlatform("fabric");
-        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        setup.doAction(p -> {
-            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
-            setupSubprojectConsumer(p, name, root, loom);
-        });
-        setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(FabricDependenciesSetup.class, p.getExtensions().getByType(LoomGradleExtensionAPI.class));
-            dependencies.execute(dependenciesSetup);
-            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
-            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-            p.getConfigurations().maybeCreate("modCompileOnly").fromDependencyCollector(dependenciesSetup.getLoader());
-        });
-
-        var loader = loaders.computeIfAbsent(name, LoaderSet::new);
-        parents.forEach(loader::parent);
-
-        rootActions.add(p -> {
-            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
-            var set = sourceSets.maybeCreate(name);
-
-            var compileOnly = Constants.forFeature(name, "compileOnly");
-            var deps = p.getDependencies();
-            deps.add(compileOnly, deps.project(Map.of("path", makeKey(root, name))));
-            var runtimeModClasses = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES));
-            runtimeModClasses.setCanBeConsumed(true);
-            runtimeModClasses.setCanBeResolved(false);
-            runtimeModClasses.getOutgoing().artifacts(p.provider(set::getOutput));
-
-            Configuration runtimeClasspathExposed = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_CLASSPATH_EXPOSED));
-            runtimeClasspathExposed.extendsFrom(p.getConfigurations().getByName(Constants.forFeature(name, Constants.RUNTIME_CLASSPATH)));
-            runtimeClasspathExposed.setCanBeConsumed(true);
-            runtimeClasspathExposed.setCanBeResolved(false);
-
-            setupParents(p, name, loaders);
-
-            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
-            loom.createRemapConfigurations(set);
-        });
-    }
-
-    @SuppressWarnings("UnstableApiUsage")
-    public void neoforge(String name, List<String> parents, Action<NeoforgeDependenciesSetup> dependencies) {
-        if (name.equals("main")) {
-            throw new IllegalArgumentException("Main source set cannot be fabric");
-        }
-        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
-        setup.setPlatform("fabric");
-        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        setup.doAction(p -> {
-            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
-            setupSubprojectConsumer(p, name, root, loom);
-        });
-        setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(NeoforgeDependenciesSetup.class, p.getExtensions().getByType(LoomGradleExtensionAPI.class));
-            dependencies.execute(dependenciesSetup);
-            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
-            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-            p.getConfigurations().maybeCreate("neoforge").fromDependencyCollector(dependenciesSetup.getNeoforge());
-        });
-
-        var loader = loaders.computeIfAbsent(name, LoaderSet::new);
-        parents.forEach(loader::parent);
-
-        rootActions.add(p -> {
-            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
-            var set = sourceSets.maybeCreate(name);
-
-            var compileOnly = Constants.forFeature(name, "compileOnly");
-            var deps = p.getDependencies();
-            var dep = (ModuleDependency) deps.project(Map.of("path", makeKey(root, name)));
-            dep.exclude(Map.of("group", "net.fabricmc", "module", "fabric-loader"));
-            deps.add(compileOnly, dep);
-            var runtimeModClasses = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES));
-            runtimeModClasses.setCanBeConsumed(true);
-            runtimeModClasses.setCanBeResolved(false);
-            runtimeModClasses.getOutgoing().artifacts(p.provider(set::getOutput));
-
-            Configuration runtimeClasspathExposed = p.getConfigurations().getByName(Constants.forFeature(name, Constants.RUNTIME_CLASSPATH_EXPOSED));
-            runtimeClasspathExposed.extendsFrom(p.getConfigurations().getByName(Constants.forFeature(name, Constants.RUNTIME_CLASSPATH)));
-            runtimeClasspathExposed.setCanBeConsumed(true);
-            runtimeClasspathExposed.setCanBeResolved(false);
-
-            setupParents(p, name, loaders);
-        });
+    private static void exposeRuntimeToSubproject(String name, Project p) {
+        Configuration runtimeClasspathExposed = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_CLASSPATH_EXPOSED));
+        runtimeClasspathExposed.extendsFrom(p.getConfigurations().getByName(Constants.forFeature(name, Constants.RUNTIME_CLASSPATH)));
+        runtimeClasspathExposed.setCanBeConsumed(true);
+        runtimeClasspathExposed.setCanBeResolved(false);
     }
 
     private Object makeKey(String root, String name) {
