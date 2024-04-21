@@ -1,0 +1,31 @@
+plugins {
+    id 'java-gradle-plugin'
+    id 'maven-publish'
+}
+
+java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
+
+group = 'dev.lukebemish'
+version = '0.1.0'
+
+repositories {
+    gradlePluginPortal()
+    maven {
+        name = 'Architectury'
+        url "https://maven.architectury.dev/"
+    }
+}
+
+gradlePlugin {
+    plugins {
+        multiloader {
+            id = 'dev.lukebemish.multiloader'
+            implementationClass = 'dev.lukebemish.multiloader.MultiloaderSettingsPlugin'
+        }
+    }
+}
+
+dependencies {
+    gradleApi()
+    api 'dev.architectury.loom:dev.architectury.loom.gradle.plugin:1.6.394'
+}
