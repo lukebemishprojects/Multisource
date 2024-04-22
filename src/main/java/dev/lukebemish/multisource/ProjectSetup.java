@@ -5,6 +5,7 @@ import groovy.lang.DelegatesTo;
 import groovy.transform.stc.ClosureParams;
 import groovy.transform.stc.SimpleType;
 import net.fabricmc.loom.api.LoomGradleExtensionAPI;
+import net.fabricmc.loom.api.RemapConfigurationSettings;
 import net.fabricmc.loom.task.RemapJarTask;
 import org.gradle.api.Action;
 import org.gradle.api.Project;
@@ -17,6 +18,7 @@ import org.gradle.api.plugins.JavaPluginExtension;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.bundling.Jar;
 import org.gradle.api.tasks.javadoc.Javadoc;
+import org.jetbrains.annotations.NotNull;
 
 import javax.inject.Inject;
 import java.util.ArrayList;
@@ -53,7 +55,7 @@ public class ProjectSetup {
         });
         rootActions.add(p -> {
             var ext = p.getExtensions().getExtraProperties();
-            ext.set("fabric.loom.disableRemappedVariants", false);
+            ext.set("fabric.loom.disableRemappedVariants", "true");
             p.getPlugins().apply("dev.architectury.loom");
         });
         rootActions.add(p -> {
@@ -116,8 +118,7 @@ public class ProjectSetup {
         });
 
         rootActions.add(p -> {
-            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
-            var set = sourceSets.maybeCreate(name);
+            var set = createSourceSet(name, p);
 
             if (name.equals("main")) {
                 // undo fabric stuff
@@ -151,6 +152,8 @@ public class ProjectSetup {
             exposeModClasses(name, p, set);
 
             setupParents(p, name, loaders);
+
+            setupCoreConfigurations(p, set);
         });
     }
 
@@ -187,8 +190,7 @@ public class ProjectSetup {
         parents.forEach(loader::parent);
 
         rootActions.add(p -> {
-            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
-            var set = sourceSets.maybeCreate(name);
+            var set = createSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
             p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
@@ -197,6 +199,8 @@ public class ProjectSetup {
             exposeRuntimeToSubproject(name, p);
 
             setupParents(p, name, loaders);
+
+            setupCoreConfigurations(p, set);
         });
     }
 
@@ -225,8 +229,7 @@ public class ProjectSetup {
         parents.forEach(loader::parent);
 
         rootActions.add(p -> {
-            var sourceSets = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets();
-            var set = sourceSets.maybeCreate(name);
+            var set = createSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
             var dep = (ModuleDependency) p.getDependencies().project(Map.of("path", makeKey(root, name)));
@@ -238,21 +241,56 @@ public class ProjectSetup {
 
             setupParents(p, name, loaders);
 
-            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
-            loom.createRemapConfigurations(set);
+            setupCoreConfigurations(p, set);
+            setupRemapConfigurations(p, set);
 
             p.afterEvaluate(it -> {
-                boolean hasJar = it.getTasks().getNames().contains(set.getTaskName("", "jar"));
-                boolean hasSourcesJar = it.getTasks().getNames().contains(set.getTaskName("", "sourcesJar"));
+                boolean hasJar = it.getTasks().getNames().contains(set.getTaskName(null, "jar"));
+                boolean hasSourcesJar = it.getTasks().getNames().contains(set.getTaskName(null, "sourcesJar"));
 
-                // TODO:
                 if (hasJar) {
-                    var remapJar = it.getTasks().register(set.getTaskName("remap", "jar"), RemapJarTask.class, t -> {
-
+                    var jar = it.getTasks().named(set.getTaskName(null, "jar"), Jar.class, t -> {
+                        t.getArchiveClassifier().set(name + "-dev");
+                        t.getDestinationDirectory().set(it.getLayout().getBuildDirectory().dir("devlibs"));
                     });
+                    var remapJar = it.getTasks().register(set.getTaskName("remap", "jar"), RemapJarTask.class, t -> {
+                        t.dependsOn(jar.get());
+                        t.getArchiveClassifier().set(name);
+                        t.getInputFile().set(jar.get().getArchiveFile());
+                    });
+                    it.getTasks().named("assemble", t -> t.dependsOn(remapJar.get()));
+
+                    for (var configurationName : List.of(Constants.RUNTIME_ELEMENTS, Constants.API_ELEMENTS)) {
+                        var config = it.getConfigurations().getByName(Constants.forFeature(name, configurationName));
+                        config.getOutgoing().getArtifacts().clear();
+                        config.getOutgoing().artifact(remapJar.get().getArchiveFile());
+                    }
+                }
+
+                if (hasSourcesJar) {
+                    var sourcesJar = it.getTasks().named(set.getTaskName(null, "sourcesJar"), Jar.class, t -> {
+                        t.getArchiveClassifier().set(name + "-sources-dev");
+                        t.getDestinationDirectory().set(it.getLayout().getBuildDirectory().dir("devlibs"));
+                    });
+                    var remapSourcesJar = it.getTasks().register(set.getTaskName("remap", "sourcesJar"), RemapJarTask.class, t -> {
+                        t.dependsOn(sourcesJar.get());
+                        t.getArchiveClassifier().set(name+"-sources");
+                        t.getInputFile().set(sourcesJar.get().getArchiveFile());
+                    });
+                    it.getTasks().named("assemble", t -> t.dependsOn(remapSourcesJar.get()));
+
+                    var config = it.getConfigurations().getByName(Constants.forFeature(name, Constants.SOURCES_ELEMENTS));
+                    config.getOutgoing().getArtifacts().clear();
+                    config.getOutgoing().artifact(remapSourcesJar.get().getArchiveFile());
                 }
             });
         });
+    }
+
+    private static @NotNull SourceSet createSourceSet(String name, Project p) {
+        var java = p.getExtensions().getByType(JavaPluginExtension.class);
+        var sourceSets = java.getSourceSets();
+        return sourceSets.maybeCreate(name);
     }
 
     public void fabric(String name, List<String> parents,
@@ -400,5 +438,74 @@ public class ProjectSetup {
             closure.setDelegate(t);
             closure.call(t);
         };
+    }
+
+    private static void setupCoreConfigurations(Project p, SourceSet sourceSet) {
+        var runtimeClasspath = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.RUNTIME_CLASSPATH));
+        var compileClasspath = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.COMPILE_CLASSPATH));
+
+        var localRuntime = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.LOCAL_RUNTIME));
+        var localImplementation = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.LOCAL_IMPLEMENTATION));
+
+        runtimeClasspath.extendsFrom(localRuntime);
+        runtimeClasspath.extendsFrom(localImplementation);
+
+        compileClasspath.extendsFrom(localImplementation);
+
+        localImplementation.setCanBeConsumed(false);
+        localImplementation.setCanBeResolved(false);
+
+        localRuntime.setCanBeConsumed(false);
+        localRuntime.setCanBeResolved(false);
+    }
+
+    private static void setupRemapConfigurations(Project p, SourceSet sourceSet) {
+        var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
+        for (var target : RemapToCreate.TARGETS) {
+            var name = sourceSet.getTaskName("mod", target.target());
+            loom.addRemapConfiguration(name, r -> {
+                r.getTargetConfigurationName().convention(sourceSet.getTaskName(null, target.target()));
+                r.getOnCompileClasspath().set(target.compile());
+                r.getOnRuntimeClasspath().set(target.runtime());
+                r.getSourceSet().set(sourceSet);
+                r.getPublishingMode().set(RemapConfigurationSettings.PublishingMode.NONE);
+            });
+            var remappedConfiguration = p.getConfigurations().named(name);
+            p.afterEvaluate(it -> {
+                if (
+                    it.getConfigurations().getNames().contains(sourceSet.getTaskName(null, Constants.RUNTIME_ELEMENTS))
+                    && it.getConfigurations().getNames().contains(sourceSet.getTaskName(null, Constants.API_ELEMENTS))
+                ) {
+                    var runtimeElements = p.getConfigurations().named(sourceSet.getTaskName(null, Constants.RUNTIME_ELEMENTS));
+                    var apiElements = p.getConfigurations().named(sourceSet.getTaskName(null, Constants.API_ELEMENTS));
+                    switch (target.publishingMode) {
+                        case NONE -> {
+                        }
+                        case COMPILE_ONLY -> {
+                            apiElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                        }
+                        case RUNTIME_ONLY -> {
+                            runtimeElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                        }
+                        case COMPILE_AND_RUNTIME -> {
+                            apiElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                            runtimeElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    private record RemapToCreate(String target, boolean compile, boolean runtime, RemapConfigurationSettings.PublishingMode publishingMode) {
+        private static final List<RemapToCreate> TARGETS = List.of(
+            new RemapToCreate(Constants.LOCAL_IMPLEMENTATION, true, true, RemapConfigurationSettings.PublishingMode.NONE),
+            new RemapToCreate(Constants.LOCAL_RUNTIME, false, true, RemapConfigurationSettings.PublishingMode.NONE),
+            new RemapToCreate(Constants.API, true, true, RemapConfigurationSettings.PublishingMode.COMPILE_AND_RUNTIME),
+            new RemapToCreate(Constants.IMPLEMENTATION, true, true, RemapConfigurationSettings.PublishingMode.RUNTIME_ONLY),
+            new RemapToCreate(Constants.COMPILE_ONLY, true, false, RemapConfigurationSettings.PublishingMode.NONE),
+            new RemapToCreate(Constants.COMPILE_ONLY_API, true, false, RemapConfigurationSettings.PublishingMode.COMPILE_ONLY),
+            new RemapToCreate(Constants.RUNTIME_ONLY, false, true, RemapConfigurationSettings.PublishingMode.RUNTIME_ONLY)
+        );
     }
 }
