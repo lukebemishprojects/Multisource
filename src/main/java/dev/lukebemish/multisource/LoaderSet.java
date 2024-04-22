@@ -1,4 +1,4 @@
-package dev.lukebemish.multiloader;
+package dev.lukebemish.multisource;
 
 import java.util.ArrayList;
 import java.util.Collections;

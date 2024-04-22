@@ -1,10 +1,11 @@
-package dev.lukebemish.multiloader;
+package dev.lukebemish.multisource;
 
 import groovy.lang.Closure;
 import groovy.lang.DelegatesTo;
 import groovy.transform.stc.ClosureParams;
 import groovy.transform.stc.SimpleType;
 import net.fabricmc.loom.api.LoomGradleExtensionAPI;
+import net.fabricmc.loom.task.RemapJarTask;
 import org.gradle.api.Action;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
@@ -62,6 +63,11 @@ public class ProjectSetup {
         });
     }
 
+    public void repositories(@ClosureParams(value = SimpleType.class, options = "org.gradle.api.artifacts.dsl.RepositoryHandler")
+                             @DelegatesTo(RepositoryHandler.class) Closure<?> closure) {
+        repositories(actionOf(closure));
+    }
+
     public void repositories(Action<RepositoryHandler> repositories) {
         this.repositories.add(repositories);
     }
@@ -71,7 +77,7 @@ public class ProjectSetup {
                        @DelegatesTo(DependenciesSetup.class)
                        Closure<?> dependencies
     ) {
-        common(name, parents, ofAction(dependencies));
+        common(name, parents, actionOf(dependencies));
     }
 
     public void common(String name,
@@ -79,7 +85,7 @@ public class ProjectSetup {
                        @DelegatesTo(DependenciesSetup.class)
                        Closure<?> dependencies
     ) {
-        common(name, ofAction(dependencies));
+        common(name, actionOf(dependencies));
     }
 
     public void common(String name, Action<DependenciesSetup> dependencies) {
@@ -89,6 +95,7 @@ public class ProjectSetup {
     @SuppressWarnings("UnstableApiUsage")
     public void common(String name, List<String> parents, Action<DependenciesSetup> dependencies) {
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
         if (!name.equals("main")) {
             setup.doAction(ProjectSetup::exposeClasspathConfigurations);
@@ -152,7 +159,7 @@ public class ProjectSetup {
                         @DelegatesTo(NeoforgeDependenciesSetup.class)
                         Closure<?> dependencies
     ) {
-        neoforge(name, parents, ofAction(dependencies));
+        neoforge(name, parents, actionOf(dependencies));
     }
 
     @SuppressWarnings("UnstableApiUsage")
@@ -161,7 +168,8 @@ public class ProjectSetup {
             throw new IllegalArgumentException("Main source set cannot be fabric");
         }
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
-        setup.setPlatform("fabric");
+        setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
+        setup.setPlatform("neoforge");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
         setup.doAction(p -> {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
@@ -172,7 +180,7 @@ public class ProjectSetup {
             dependencies.execute(dependenciesSetup);
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
             p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-            p.getConfigurations().maybeCreate("neoforge").fromDependencyCollector(dependenciesSetup.getNeoforge());
+            p.getConfigurations().maybeCreate("neoForge").fromDependencyCollector(dependenciesSetup.getNeoForge());
         });
 
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
@@ -198,6 +206,7 @@ public class ProjectSetup {
             throw new IllegalArgumentException("Main source set cannot be fabric");
         }
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
         setup.doAction(p -> {
@@ -231,9 +240,19 @@ public class ProjectSetup {
 
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             loom.createRemapConfigurations(set);
-        });
 
-        // TODO: set up remap
+            p.afterEvaluate(it -> {
+                boolean hasJar = it.getTasks().getNames().contains(set.getTaskName("", "jar"));
+                boolean hasSourcesJar = it.getTasks().getNames().contains(set.getTaskName("", "sourcesJar"));
+
+                // TODO:
+                if (hasJar) {
+                    var remapJar = it.getTasks().register(set.getTaskName("remap", "jar"), RemapJarTask.class, t -> {
+
+                    });
+                }
+            });
+        });
     }
 
     public void fabric(String name, List<String> parents,
@@ -241,7 +260,7 @@ public class ProjectSetup {
                        @DelegatesTo(FabricDependenciesSetup.class)
                        Closure<?> dependencies
     ) {
-        fabric(name, parents, ofAction(dependencies));
+        fabric(name, parents, actionOf(dependencies));
     }
 
     private static void exposeModClasses(String name, Project p, SourceSet set) {
@@ -376,7 +395,7 @@ public class ProjectSetup {
         );
     }
 
-    private static <T> Action<T> ofAction(Closure<?> closure) {
+    private static <T> Action<T> actionOf(Closure<?> closure) {
         return t -> {
             closure.setDelegate(t);
             closure.call(t);

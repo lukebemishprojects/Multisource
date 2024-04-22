@@ -1,4 +1,4 @@
-package dev.lukebemish.multiloader;
+package dev.lukebemish.multisource;
 
 import org.gradle.api.artifacts.dsl.RepositoryHandler;
 

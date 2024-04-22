@@ -19,8 +19,8 @@ repositories {
 gradlePlugin {
     plugins {
         multiloader {
-            id = 'dev.lukebemish.multiloader'
-            implementationClass = 'dev.lukebemish.multiloader.MultiloaderSettingsPlugin'
+            id = 'dev.lukebemish.multisource'
+            implementationClass = 'dev.lukebemish.multisource.MultisourceSettingsPlugin'
         }
     }
 }

@@ -1,4 +1,4 @@
-package dev.lukebemish.multiloader;
+package dev.lukebemish.multisource;
 
 import net.fabricmc.loom.api.LoomGradleExtensionAPI;
 import org.gradle.api.Project;
