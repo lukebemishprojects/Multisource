@@ -35,9 +35,8 @@ public class ProjectSetup {
     private final String root;
     private final Map<String, SourceSetup> sources = new HashMap<>();
     private final List<Action<Project>> rootActions = new ArrayList<>();
-    private final List<Action<Project>> rootAfterActions = new ArrayList<>();
     private final Map<String, LoaderSet> loaders = new HashMap<>();
-    private List<Action<RepositoryHandler>> repositories = new ArrayList<>();
+    private final List<Action<RepositoryHandler>> repositories = new ArrayList<>();
 
     @Inject
     ProjectSetup(String root, Settings settings) {
@@ -45,18 +44,18 @@ public class ProjectSetup {
         this.settings = settings;
         settings.getGradle().beforeProject(p -> {
             if (p.getPath().equals(root)) {
+                SourceSetup mainSetup = sources.get("main");
+                if (mainSetup == null) {
+                    throw new IllegalStateException("No source for 'main' was defined; unsure how to treat it");
+                }
+                mainSetup.executeOnProject(p);
                 rootActions.forEach(a -> a.execute(p));
-            }
-        });
-        settings.getGradle().afterProject(p -> {
-            if (p.getPath().equals(root)) {
-                rootAfterActions.forEach(a -> a.execute(p));
             }
         });
         rootActions.add(p -> {
             var ext = p.getExtensions().getExtraProperties();
             ext.set("fabric.loom.disableRemappedVariants", "true");
-            p.getPlugins().apply("dev.architectury.loom");
+            p.getPlugins().apply("java-library");
         });
         rootActions.add(p -> {
             var repositories = p.getRepositories();
@@ -102,7 +101,7 @@ public class ProjectSetup {
         if (!name.equals("main")) {
             setup.doAction(ProjectSetup::exposeClasspathConfigurations);
         }
-        setup.doAction(p -> {
+        setup.doActionLate(p -> {
             var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
             dependencies.execute(dependenciesSetup);
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
@@ -178,7 +177,7 @@ public class ProjectSetup {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             setupSubprojectConsumer(p, name, root, loom);
         });
-        setup.doAction(p -> {
+        setup.doActionLate(p -> {
             var dependenciesSetup = p.getObjects().newInstance(NeoforgeDependenciesSetup.class, p);
             dependencies.execute(dependenciesSetup);
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
@@ -217,7 +216,7 @@ public class ProjectSetup {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             setupSubprojectConsumer(p, name, root, loom);
         });
-        setup.doAction(p -> {
+        setup.doActionLate(p -> {
             var dependenciesSetup = p.getObjects().newInstance(FabricDependenciesSetup.class, p);
             dependencies.execute(dependenciesSetup);
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());

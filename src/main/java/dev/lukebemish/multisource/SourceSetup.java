@@ -13,7 +13,8 @@ public class SourceSetup {
     private final Settings settings;
     private final String project;
     private final String name;
-    private List<Action<Project>> dependencies = new ArrayList<>();
+    private final List<Action<Project>> setupActions = new ArrayList<>();
+    private final List<Action<Project>> setupActionsLate = new ArrayList<>();
     private String platform = "fabric";
 
     @Inject
@@ -25,15 +26,20 @@ public class SourceSetup {
         String key = name.equals("main") ? project : (project.equals(":") ? "" : project) + ":" + name;
         if (!name.equals("main")) {
             settings.include(key);
+            settings.getGradle().beforeProject(p -> {
+                if (p.getPath().equals(key)) {
+                    executeOnProject(p);
+                }
+            });
         }
-        settings.getGradle().beforeProject(p -> {
-            if (p.getPath().equals(key)) {
-                ExtraPropertiesExtension ext = p.getExtensions().getExtraProperties();
-                ext.set("loom.platform", platform);
-                applyArchLoom(p);
-                dependencies.forEach(d -> d.execute(p));
-            }
-        });
+    }
+
+    void executeOnProject(Project p) {
+        ExtraPropertiesExtension ext = p.getExtensions().getExtraProperties();
+        ext.set("loom.platform", platform);
+        this.setupActionsLate.forEach(p::afterEvaluate);
+        applyArchLoom(p);
+        setupActions.forEach(d -> d.execute(p));
     }
 
     public void setPlatform(String platform) {
@@ -41,10 +47,14 @@ public class SourceSetup {
     }
 
     public void doAction(Action<Project> dependencies) {
-        this.dependencies.add(dependencies);
+        this.setupActions.add(dependencies);
     }
 
     private void applyArchLoom(Project project) {
         project.getPluginManager().apply("dev.architectury.loom");
+    }
+
+    public void doActionLate(Action<Project> dependencies) {
+        this.setupActionsLate.add(dependencies);
     }
 }
