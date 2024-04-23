@@ -71,6 +71,8 @@ managedVersioning {
     apply()
 }
 
+println "Version: ${project.version}"
+
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
 group = 'dev.lukebemish'
