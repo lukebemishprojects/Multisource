@@ -51,8 +51,4 @@ public class SourceSetup {
     private void applyArchLoom(Project project) {
         project.getPluginManager().apply("dev.architectury.loom");
     }
-
-    public void doActionLate(Action<Project> dependencies) {
-        this.setupActionsLate.add(dependencies);
-    }
 }

@@ -1,12 +1,79 @@
 plugins {
     id 'java-gradle-plugin'
     id 'maven-publish'
+    id 'dev.lukebemish.managedversioning' version '1.2.17'
+    id "com.gradle.plugin-publish" version "1.2.1"
+}
+
+managedVersioning {
+    versionFile.set rootProject.file('version.properties')
+    versionPRs()
+    versionSnapshots()
+
+    gitHubActions {
+        release {
+            prettyName = 'Release'
+            workflowDispatch = true
+            gradleJob {
+                name = 'build'
+                setupGitUser()
+                readOnly = false
+                gradlew 'Tag Release', 'tagRelease'
+                gradlew 'Build', 'build'
+                push()
+                dependencySubmission {
+                    project(project)
+                }
+                recordVersion 'Record Version', 'version'
+            }
+            gradleJob {
+                name.set 'publishPlugins'
+                buildCache()
+                needs.add('build')
+                gradlew 'Publish Plugins', 'publishPlugins'
+                tag.set('${{needs.build.outputs.version}}')
+                pluginPortal()
+            }
+        }
+
+        snapshot {
+            prettyName.set 'Snapshot'
+            workflowDispatch.set(true)
+            onBranches.add 'main'
+            gradleJob {
+                buildCache()
+                name.set 'build'
+                gradlew 'Build', 'build'
+                gradlew 'Publish', 'publish'
+                mavenSnapshot('github')
+            }
+        }
+        build_pr {
+            prettyName.set 'Build PR'
+            pullRequest.set(true)
+            gradleJob {
+                name.set 'build'
+                gradlew 'Build', 'build'
+                gradlew 'Publish', 'publish'
+                pullRequestArtifact()
+            }
+        }
+        publish_pr {
+            prettyName.set 'Publish PR'
+            publishPullRequestAction(
+                'github',
+                "dev/lukebemish/multisource",
+                'Build PR'
+            )
+        }
+    }
+
+    apply()
 }
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
 
 group = 'dev.lukebemish'
-version = '0.1.0'
 
 repositories {
     gradlePluginPortal()
@@ -14,13 +81,27 @@ repositories {
         name = 'Architectury'
         url "https://maven.architectury.dev/"
     }
+    maven {
+        name = 'FabricMC'
+        url "https://maven.fabricmc.net/"
+    }
+    maven {
+        name = 'NeoForged'
+        url "https://maven.neoforged.net/releases/"
+    }
 }
 
 gradlePlugin {
+    website = 'https://github.com/lukebemishprojects/Multisource'
+    vcsUrl = 'https://github.com/lukebemishprojects/Multisource.git'
+
     plugins {
-        multiloader {
+        multisource {
             id = 'dev.lukebemish.multisource'
             implementationClass = 'dev.lukebemish.multisource.MultisourceSettingsPlugin'
+            displayName = 'Multisource'
+            description = 'Settings plugin for setting up a multi-loader environment for Minecraft mod development, using source sets which delegate to individual loom projects'
+            tags.addAll(['minecraft', 'fabric-loom'])
         }
     }
 }
