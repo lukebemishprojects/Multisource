@@ -29,6 +29,7 @@ public final class Constants {
 
     public static final String OUTPUT_JAR = "outputJar";
     public static final String OUTPUT_SOURCES_JAR = "outputSourcesJar";
+    public static final String INCLUDE = "include";
 
     public static void neoMaven(RepositoryHandler repositories) {
         repositories.maven(repo -> {
@@ -45,11 +46,4 @@ public final class Constants {
     }
 
     private Constants() {}
-
-    public static void mojangMaven(RepositoryHandler repositories) {
-        repositories.maven(repo -> {
-            repo.setUrl("https://libraries.minecraft.net/");
-            repo.setName("Mojang");
-        });
-    }
 }

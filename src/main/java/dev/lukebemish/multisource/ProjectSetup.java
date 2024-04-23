@@ -7,7 +7,7 @@ import groovy.transform.stc.SimpleType;
 import net.fabricmc.loom.LoomRepositoryPlugin;
 import net.fabricmc.loom.api.LoomGradleExtensionAPI;
 import net.fabricmc.loom.api.RemapConfigurationSettings;
-import net.fabricmc.loom.task.RemapJarTask;
+import net.fabricmc.loom.task.AbstractRemapJarTask;
 import org.gradle.api.Action;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
@@ -49,7 +49,6 @@ public class ProjectSetup {
             }
         });
         repositories.add(Constants::neoMaven);
-        repositories.add(Constants::mojangMaven);
         rootActions.add(p -> {
             p.getPluginManager().apply(LoomRepositoryPlugin.class);
         });
@@ -167,6 +166,7 @@ public class ProjectSetup {
             setupParents(p, name, loaders);
 
             setupCoreConfigurations(p, set);
+            setupIncludeConfiguration(p, set);
         });
     }
 
@@ -207,6 +207,7 @@ public class ProjectSetup {
 
             setupCoreConfigurations(p, set);
             setupRemapConfigurations(p, set);
+            setupIncludeConfiguration(p, set);
 
             p.afterEvaluate(it -> {
                 boolean hasJar = it.getTasks().getNames().contains(set.getTaskName(null, "jar"));
@@ -372,6 +373,7 @@ public class ProjectSetup {
     private static void setupSubprojectRemappingConsumer(Project p, String name, String root, LoomGradleExtensionAPI loom) {
         p.getDependencies().add("modCompileOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_COMPILE_CLASSPATH))));
         p.getDependencies().add("modRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_RUNTIME_CLASSPATH))));
+        p.getDependencies().add("include", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.INCLUDE))));
 
         var outputJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_JAR);
         var outputSourcesJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_SOURCES_JAR);
@@ -386,14 +388,14 @@ public class ProjectSetup {
         p.getDependencies().add(Constants.OUTPUT_JAR, p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.OUTPUT_JAR))));
         p.getDependencies().add(Constants.OUTPUT_SOURCES_JAR, p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.OUTPUT_SOURCES_JAR))));
 
-        var remapJar = p.getTasks().register("remapOutputJar", RemapJarTask.class, t -> {
+        var remapJar = p.getTasks().named("remapJar", AbstractRemapJarTask.class, t -> {
             t.dependsOn(outputJar);
             t.getArchiveClassifier().set("output");
             t.getInputFile().fileProvider(p.provider(() -> outputJar.isEmpty() ? null : outputJar.getSingleFile()));
             t.onlyIf(it -> !outputJar.isEmpty());
         });
 
-        var remapSourcesJar = p.getTasks().register("remapOutputSourcesJar", RemapJarTask.class, t -> {
+        var remapSourcesJar = p.getTasks().named("remapSourcesJar", AbstractRemapJarTask.class, t -> {
             t.dependsOn(outputSourcesJar);
             t.getArchiveClassifier().set("output-sources");
             t.getInputFile().fileProvider(p.provider(() -> outputSourcesJar.isEmpty() ? null : outputSourcesJar.getSingleFile()));
@@ -479,6 +481,12 @@ public class ProjectSetup {
 
         localRuntime.setCanBeConsumed(false);
         localRuntime.setCanBeResolved(false);
+    }
+
+    private static void setupIncludeConfiguration(Project p, SourceSet sourceSet) {
+        var include = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.INCLUDE));
+        include.setCanBeResolved(false);
+        include.setCanBeConsumed(true);
     }
 
     private static void setupRemapConfigurations(Project p, SourceSet sourceSet) {
