@@ -23,18 +23,16 @@ public class SourceSetup {
         this.settings = settings;
         this.name = name;
 
-        String key = name.equals("main") ? project : (project.equals(":") ? "" : project) + ":" + name;
-        if (!name.equals("main")) {
-            settings.include(key);
-            settings.getGradle().beforeProject(p -> {
-                if (p.getPath().equals(key)) {
-                    executeOnProject(p);
-                }
-            });
-        }
+        String key = (project.equals(":") ? "" : project) + ":" + name;
+        settings.include(key);
+        settings.getGradle().beforeProject(p -> {
+            if (p.getPath().equals(key)) {
+                executeOnProject(p);
+            }
+        });
     }
 
-    void executeOnProject(Project p) {
+    private void executeOnProject(Project p) {
         ExtraPropertiesExtension ext = p.getExtensions().getExtraProperties();
         ext.set("loom.platform", platform);
         this.setupActionsLate.forEach(p::afterEvaluate);

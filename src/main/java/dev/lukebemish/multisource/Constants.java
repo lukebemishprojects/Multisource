@@ -8,10 +8,12 @@ import java.util.Locale;
 public final class Constants {
     public static final String SOURCES_ELEMENTS = JavaPlugin.SOURCES_ELEMENTS_CONFIGURATION_NAME;
 
+    public static final String TO_REMAP_RUNTIME_CLASSPATH = "toRemapRuntimeClasspath";
     public static final String RUNTIME_CLASSPATH = JavaPlugin.RUNTIME_CLASSPATH_CONFIGURATION_NAME;
     public static final String RUNTIME_CLASSPATH_EXPOSED = RUNTIME_CLASSPATH+"Exposed";
     public static final String RUNTIME_ELEMENTS = JavaPlugin.RUNTIME_ELEMENTS_CONFIGURATION_NAME;
 
+    public static final String TO_REMAP_COMPILE_CLASSPATH = "toRemapCompileClasspath";
     public static final String COMPILE_CLASSPATH = JavaPlugin.COMPILE_CLASSPATH_CONFIGURATION_NAME;
     public static final String COMPILE_CLASSPATH_EXPOSED = COMPILE_CLASSPATH+"Exposed";
     public static final String API_ELEMENTS = JavaPlugin.API_ELEMENTS_CONFIGURATION_NAME;
@@ -24,6 +26,9 @@ public final class Constants {
     public static final String COMPILE_ONLY = JavaPlugin.COMPILE_ONLY_CONFIGURATION_NAME;
     public static final String RUNTIME_ONLY = JavaPlugin.RUNTIME_ONLY_CONFIGURATION_NAME;
     public static final String COMPILE_ONLY_API = JavaPlugin.COMPILE_ONLY_API_CONFIGURATION_NAME;
+
+    public static final String OUTPUT_JAR = "outputJar";
+    public static final String OUTPUT_SOURCES_JAR = "outputSourcesJar";
 
     public static void neoMaven(RepositoryHandler repositories) {
         repositories.maven(repo -> {
@@ -40,4 +45,11 @@ public final class Constants {
     }
 
     private Constants() {}
+
+    public static void mojangMaven(RepositoryHandler repositories) {
+        repositories.maven(repo -> {
+            repo.setUrl("https://libraries.minecraft.net/");
+            repo.setName("Mojang");
+        });
+    }
 }

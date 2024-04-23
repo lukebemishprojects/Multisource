@@ -4,6 +4,7 @@ import groovy.lang.Closure;
 import groovy.lang.DelegatesTo;
 import groovy.transform.stc.ClosureParams;
 import groovy.transform.stc.SimpleType;
+import net.fabricmc.loom.LoomRepositoryPlugin;
 import net.fabricmc.loom.api.LoomGradleExtensionAPI;
 import net.fabricmc.loom.api.RemapConfigurationSettings;
 import net.fabricmc.loom.task.RemapJarTask;
@@ -44,23 +45,20 @@ public class ProjectSetup {
         this.settings = settings;
         settings.getGradle().beforeProject(p -> {
             if (p.getPath().equals(root)) {
-                SourceSetup mainSetup = sources.get("main");
-                if (mainSetup == null) {
-                    throw new IllegalStateException("No source for 'main' was defined; unsure how to treat it");
-                }
-                mainSetup.executeOnProject(p);
                 rootActions.forEach(a -> a.execute(p));
             }
         });
+        repositories.add(Constants::neoMaven);
+        repositories.add(Constants::mojangMaven);
         rootActions.add(p -> {
-            var ext = p.getExtensions().getExtraProperties();
-            ext.set("fabric.loom.disableRemappedVariants", "true");
+            p.getPluginManager().apply(LoomRepositoryPlugin.class);
+        });
+        rootActions.add(p -> {
             p.getPlugins().apply("java-library");
         });
         rootActions.add(p -> {
             var repositories = p.getRepositories();
             this.repositories.forEach(r -> r.execute(repositories));
-            Constants.neoMaven(repositories);
         });
     }
 
@@ -98,9 +96,7 @@ public class ProjectSetup {
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
-        if (!name.equals("main")) {
-            setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        }
+        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
         setup.doActionLate(p -> {
             var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
             dependencies.execute(dependenciesSetup);
@@ -119,34 +115,8 @@ public class ProjectSetup {
         rootActions.add(p -> {
             var set = createSourceSet(name, p);
 
-            if (name.equals("main")) {
-                // undo fabric stuff
-                p.getTasks().named("remapJar", t -> t.setEnabled(false));
-                p.getTasks().named("remapSourcesJar", t -> t.setEnabled(false));
-                p.getTasks().named("jar", Jar.class, t -> {
-                    t.getArchiveClassifier().set("");
-                    t.getDestinationDirectory().set(p.getLayout().getBuildDirectory().dir("libs"));
-                });
-                p.afterEvaluate(it -> {
-                    if (!it.getTasks().getNames().contains("sourcesJar")) {
-                        // No sources jar, so return
-                        return;
-                    }
-                    it.getTasks().named("sourcesJar", Jar.class, t -> {
-                        t.getArchiveClassifier().set("sources");
-                        t.getDestinationDirectory().set(p.getLayout().getBuildDirectory().dir("libs"));
-                    });
-                });
-                for (String configName : List.of(Constants.API_ELEMENTS, Constants.RUNTIME_ELEMENTS)) {
-                    var config = p.getConfigurations().maybeCreate(configName);
-                    config.getOutgoing().getArtifacts().removeIf(a -> a.getBuildDependencies().getDependencies(null).contains(p.getTasks().getByName("remapJar")));
-                }
-                var sourcesConfig = p.getConfigurations().maybeCreate(Constants.SOURCES_ELEMENTS);
-                sourcesConfig.getOutgoing().getArtifacts().removeIf(a -> a.getBuildDependencies().getDependencies(null).contains(p.getTasks().getByName("remapSourcesJar")));
-            } else {
-                var compileOnly = Constants.forFeature(name, "compileOnly");
-                p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
-            }
+            var compileOnly = Constants.forFeature(name, "compileOnly");
+            p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
 
             exposeModClasses(name, p, set);
 
@@ -166,9 +136,6 @@ public class ProjectSetup {
 
     @SuppressWarnings("UnstableApiUsage")
     public void neoforge(String name, List<String> parents, Action<NeoforgeDependenciesSetup> dependencies) {
-        if (name.equals("main")) {
-            throw new IllegalArgumentException("Main source set cannot be fabric");
-        }
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("neoforge");
@@ -205,9 +172,6 @@ public class ProjectSetup {
 
     @SuppressWarnings("UnstableApiUsage")
     public void fabric(String name, List<String> parents, Action<FabricDependenciesSetup> dependencies) {
-        if (name.equals("main")) {
-            throw new IllegalArgumentException("Main source set cannot be fabric");
-        }
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
@@ -215,6 +179,7 @@ public class ProjectSetup {
         setup.doAction(p -> {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             setupSubprojectConsumer(p, name, root, loom);
+            setupSubprojectRemappingConsumer(p, name, root, loom);
         });
         setup.doActionLate(p -> {
             var dependenciesSetup = p.getObjects().newInstance(FabricDependenciesSetup.class, p);
@@ -252,17 +217,28 @@ public class ProjectSetup {
                         t.getArchiveClassifier().set(name + "-dev");
                         t.getDestinationDirectory().set(it.getLayout().getBuildDirectory().dir("devlibs"));
                     });
-                    var remapJar = it.getTasks().register(set.getTaskName("remap", "jar"), RemapJarTask.class, t -> {
-                        t.dependsOn(jar.get());
-                        t.getArchiveClassifier().set(name);
-                        t.getInputFile().set(jar.get().getArchiveFile());
+                    var outputJar = it.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.OUTPUT_JAR));
+                    outputJar.setCanBeResolved(false);
+                    outputJar.setCanBeConsumed(true);
+                    outputJar.getOutgoing().artifact(jar.get().getArchiveFile());
+
+                    var outputJarConsumer = it.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.OUTPUT_JAR + "Consumer"));
+                    outputJarConsumer.setCanBeResolved(true);
+                    outputJarConsumer.setCanBeConsumed(false);
+                    outputJarConsumer.setTransitive(false);
+                    it.getDependencies().add(outputJarConsumer.getName(), it.getDependencies().project(Map.of("path", makeKey(root, name), "configuration", Constants.OUTPUT_JAR + "Exposed")));
+
+                    var remapJar = it.getTasks().register(set.getTaskName("remap", "jar"), CopySingleFileTask.class, t -> {
+                        t.dependsOn(outputJarConsumer);
+                        t.getInputFiles().from(outputJarConsumer);
+                        t.getOutputClassifier().set(name);
                     });
                     it.getTasks().named("assemble", t -> t.dependsOn(remapJar.get()));
 
                     for (var configurationName : List.of(Constants.RUNTIME_ELEMENTS, Constants.API_ELEMENTS)) {
                         var config = it.getConfigurations().getByName(Constants.forFeature(name, configurationName));
                         config.getOutgoing().getArtifacts().clear();
-                        config.getOutgoing().artifact(remapJar.get().getArchiveFile());
+                        config.getOutgoing().artifact(remapJar.get().getOutputFile());
                     }
                 }
 
@@ -271,16 +247,28 @@ public class ProjectSetup {
                         t.getArchiveClassifier().set(name + "-sources-dev");
                         t.getDestinationDirectory().set(it.getLayout().getBuildDirectory().dir("devlibs"));
                     });
-                    var remapSourcesJar = it.getTasks().register(set.getTaskName("remap", "sourcesJar"), RemapJarTask.class, t -> {
-                        t.dependsOn(sourcesJar.get());
-                        t.getArchiveClassifier().set(name+"-sources");
-                        t.getInputFile().set(sourcesJar.get().getArchiveFile());
+
+                    var outputSourcesJar = it.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.OUTPUT_SOURCES_JAR));
+                    outputSourcesJar.setCanBeResolved(false);
+                    outputSourcesJar.setCanBeConsumed(true);
+                    outputSourcesJar.getOutgoing().artifact(sourcesJar.get().getArchiveFile());
+
+                    var outputSourcesJarConsumer = it.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.OUTPUT_SOURCES_JAR + "Consumer"));
+                    outputSourcesJarConsumer.setCanBeResolved(true);
+                    outputSourcesJarConsumer.setCanBeConsumed(false);
+                    outputSourcesJarConsumer.setTransitive(false);
+                    it.getDependencies().add(outputSourcesJarConsumer.getName(), it.getDependencies().project(Map.of("path", makeKey(root, name), "configuration", Constants.OUTPUT_SOURCES_JAR + "Exposed")));
+
+                    var remapSourcesJar = it.getTasks().register(set.getTaskName("remap", "sourcesJar"), CopySingleFileTask.class, t -> {
+                        t.dependsOn(outputSourcesJarConsumer);
+                        t.getInputFiles().from(outputSourcesJarConsumer);
+                        t.getOutputClassifier().set(name+"-sources");
                     });
                     it.getTasks().named("assemble", t -> t.dependsOn(remapSourcesJar.get()));
 
                     var config = it.getConfigurations().getByName(Constants.forFeature(name, Constants.SOURCES_ELEMENTS));
                     config.getOutgoing().getArtifacts().clear();
-                    config.getOutgoing().artifact(remapSourcesJar.get().getArchiveFile());
+                    config.getOutgoing().artifact(remapSourcesJar.get().getOutputFile());
                 }
             });
         });
@@ -375,13 +363,48 @@ public class ProjectSetup {
     }
 
     private Object makeKey(String root, String name) {
-        if (name.equals("main")) {
-            return root;
-        }
         if (root.equals(":")) {
             return ":" + name;
         }
         return root + ":" + name;
+    }
+
+    private static void setupSubprojectRemappingConsumer(Project p, String name, String root, LoomGradleExtensionAPI loom) {
+        p.getDependencies().add("modCompileOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_COMPILE_CLASSPATH))));
+        p.getDependencies().add("modRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_RUNTIME_CLASSPATH))));
+
+        var outputJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_JAR);
+        var outputSourcesJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_SOURCES_JAR);
+
+        outputJar.setCanBeResolved(true);
+        outputJar.setCanBeConsumed(false);
+        outputJar.setTransitive(false);
+        outputSourcesJar.setCanBeResolved(true);
+        outputSourcesJar.setCanBeConsumed(false);
+        outputSourcesJar.setTransitive(false);
+
+        p.getDependencies().add(Constants.OUTPUT_JAR, p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.OUTPUT_JAR))));
+        p.getDependencies().add(Constants.OUTPUT_SOURCES_JAR, p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.OUTPUT_SOURCES_JAR))));
+
+        var remapJar = p.getTasks().register("remapOutputJar", RemapJarTask.class, t -> {
+            t.dependsOn(outputJar);
+            t.getArchiveClassifier().set("output");
+            t.getInputFile().fileProvider(p.provider(() -> outputJar.isEmpty() ? null : outputJar.getSingleFile()));
+            t.onlyIf(it -> !outputJar.isEmpty());
+        });
+
+        var remapSourcesJar = p.getTasks().register("remapOutputSourcesJar", RemapJarTask.class, t -> {
+            t.dependsOn(outputSourcesJar);
+            t.getArchiveClassifier().set("output-sources");
+            t.getInputFile().fileProvider(p.provider(() -> outputSourcesJar.isEmpty() ? null : outputSourcesJar.getSingleFile()));
+            t.onlyIf(it -> !outputSourcesJar.isEmpty());
+        });
+
+        var outputJarExposed = p.getConfigurations().maybeCreate(Constants.OUTPUT_JAR + "Exposed");
+        var outputSourcesJarExposed = p.getConfigurations().maybeCreate(Constants.OUTPUT_SOURCES_JAR + "Exposed");
+
+        outputJarExposed.getOutgoing().artifact(remapJar.get().getArchiveFile());
+        outputSourcesJarExposed.getOutgoing().artifact(remapSourcesJar.get().getArchiveFile());
     }
 
     private static void setupSubprojectConsumer(Project p, String name, String root, LoomGradleExtensionAPI loom) {
@@ -459,17 +482,23 @@ public class ProjectSetup {
     }
 
     private static void setupRemapConfigurations(Project p, SourceSet sourceSet) {
-        var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
+        var toRemapRuntime = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.TO_REMAP_RUNTIME_CLASSPATH));
+        toRemapRuntime.setCanBeResolved(false);
+        toRemapRuntime.setCanBeConsumed(true);
+        var toRemapCompile = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.TO_REMAP_COMPILE_CLASSPATH));
+        toRemapCompile.setCanBeResolved(false);
+        toRemapCompile.setCanBeConsumed(true);
         for (var target : RemapToCreate.TARGETS) {
             var name = sourceSet.getTaskName("mod", target.target());
-            loom.addRemapConfiguration(name, r -> {
-                r.getTargetConfigurationName().convention(sourceSet.getTaskName(null, target.target()));
-                r.getOnCompileClasspath().set(target.compile());
-                r.getOnRuntimeClasspath().set(target.runtime());
-                r.getSourceSet().set(sourceSet);
-                r.getPublishingMode().set(RemapConfigurationSettings.PublishingMode.NONE);
-            });
-            var remappedConfiguration = p.getConfigurations().named(name);
+            var conf = p.getConfigurations().maybeCreate(name);
+            conf.setCanBeResolved(false);
+            conf.setCanBeConsumed(false);
+            if (target.compile) {
+                toRemapCompile.extendsFrom(conf);
+            }
+            if (target.runtime) {
+                toRemapRuntime.extendsFrom(conf);
+            }
             p.afterEvaluate(it -> {
                 if (
                     it.getConfigurations().getNames().contains(sourceSet.getTaskName(null, Constants.RUNTIME_ELEMENTS))
@@ -481,14 +510,14 @@ public class ProjectSetup {
                         case NONE -> {
                         }
                         case COMPILE_ONLY -> {
-                            apiElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                            apiElements.configure(d -> d.extendsFrom(conf));
                         }
                         case RUNTIME_ONLY -> {
-                            runtimeElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                            runtimeElements.configure(d -> d.extendsFrom(conf));
                         }
                         case COMPILE_AND_RUNTIME -> {
-                            apiElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
-                            runtimeElements.configure(d -> d.extendsFrom(remappedConfiguration.get()));
+                            apiElements.configure(d -> d.extendsFrom(conf));
+                            runtimeElements.configure(d -> d.extendsFrom(conf));
                         }
                     }
                 }
