@@ -71,6 +71,9 @@ managedVersioning {
     apply()
 }
 
+managedVersioning.publishing.mavenPullRequest(publishing)
+managedVersioning.publishing.mavenSnapshot(publishing)
+
 println "Version: ${project.version}"
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
