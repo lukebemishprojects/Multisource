@@ -12,6 +12,7 @@ import net.fabricmc.loom.task.RemapSourcesJarTask;
 import org.gradle.api.Action;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.artifacts.ModuleDependency;
 import org.gradle.api.artifacts.dsl.RepositoryHandler;
 import org.gradle.api.attributes.Attribute;
 import org.gradle.api.initialization.Settings;
@@ -338,7 +339,12 @@ public class ProjectSetup {
         var runtimeModClasses = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES));
         runtimeModClasses.setCanBeConsumed(true);
         runtimeModClasses.setCanBeResolved(false);
-        runtimeModClasses.getOutgoing().artifacts(p.provider(set::getOutput));
+        runtimeModClasses.getOutgoing().artifacts(p.provider(() -> set.getOutput().getClassesDirs()), artifact ->
+            artifact.builtBy(p.getTasks().getByName(set.getClassesTaskName()))
+        );
+        runtimeModClasses.getOutgoing().artifact(p.provider(() -> set.getOutput().getResourcesDir()), artifact ->
+            artifact.builtBy(p.getTasks().getByName(set.getProcessResourcesTaskName()))
+        );
     }
 
     private static void setupParents(Project p, String name, Map<String, LoaderSet> loaders) {
@@ -347,10 +353,7 @@ public class ProjectSetup {
             var javadocPresent = it.getTasks().getNames().contains(Constants.forFeature(name, "javadoc"));
             var jarPresent = it.getTasks().getNames().contains(Constants.forFeature(name, "jar"));
 
-            Set<String> parents = new HashSet<>();
-            Set<String> visited = new LinkedHashSet<>();
-            visited.add(name);
-            traverseLoaders(loaders.get(name), loaders, parents, visited);
+            Set<String> parents = getParents(name, loaders);
 
             var runtimeModClasses = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES));
             for (String parent : loaders.get(name).getParents()) {
@@ -392,6 +395,14 @@ public class ProjectSetup {
                 });
             }
         });
+    }
+
+    private static @NotNull Set<String> getParents(String name, Map<String, LoaderSet> loaders) {
+        Set<String> parents = new HashSet<>();
+        Set<String> visited = new LinkedHashSet<>();
+        visited.add(name);
+        traverseLoaders(loaders.get(name), loaders, parents, visited);
+        return parents;
     }
 
     private static void traverseLoaders(LoaderSet loaderSet, Map<String, LoaderSet> loaders, Set<String> parents, Set<String> visited) {
@@ -462,21 +473,25 @@ public class ProjectSetup {
 
     private static void setupSubprojectConsumer(Project p, String name, String root, LoomGradleExtensionAPI loom) {
         SourceSet runs = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().maybeCreate("runs");
+        Configuration runtimeModClasses = p.getConfigurations().maybeCreate(Constants.RUNTIME_MOD_CLASSES);
         p.getConfigurations().getByName("runsRuntimeClasspath").extendsFrom(p.getConfigurations().getByName(Constants.RUNTIME_CLASSPATH));
-        Configuration runsModClasses = p.getConfigurations().maybeCreate("runsModClasses");
-        runsModClasses.setTransitive(false);
+        p.getConfigurations().getByName("runsRuntimeClasspath").extendsFrom(runtimeModClasses);
 
         loom.mods(mods -> {
-            mods.maybeCreate("main").configuration(runsModClasses);
+            var mod = mods.maybeCreate("main");
+            mod.configuration(runtimeModClasses);
+            mod.sourceSet(runs);
         });
         loom.getRunConfigs().configureEach(run -> {
             run.setIdeConfigGenerated(true);
-            run.setSource(runs);
+            run.source(runs);
         });
         loom.createRemapConfigurations(runs);
 
         p.getDependencies().add("runsRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_CLASSPATH_EXPOSED))));
-        p.getDependencies().add("runsModClasses", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES))));
+        var modClassesDep = p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES)));
+        ((ModuleDependency) modClassesDep).setTransitive(false);
+        p.getDependencies().add("runsImplementation", modClassesDep);
     }
 
     private static void exposeClasspathConfigurations(Project p) {
