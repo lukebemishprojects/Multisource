@@ -113,7 +113,7 @@ public class ProjectSetup {
         });
 
         rootActions.add(p -> {
-            var set = createSourceSet(name, p);
+            var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
             p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
@@ -157,7 +157,7 @@ public class ProjectSetup {
         parents.forEach(loader::parent);
 
         rootActions.add(p -> {
-            var set = createSourceSet(name, p);
+            var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
             p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
@@ -197,7 +197,7 @@ public class ProjectSetup {
         parents.forEach(loader::parent);
 
         rootActions.add(p -> {
-            var set = createSourceSet(name, p);
+            var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
             var dep = (ModuleDependency) p.getDependencies().project(Map.of("path", makeKey(root, name)));
@@ -284,7 +284,7 @@ public class ProjectSetup {
         });
     }
 
-    private static @NotNull SourceSet createSourceSet(String name, Project p) {
+    private static @NotNull SourceSet getOrCreateSourceSet(String name, Project p) {
         var java = p.getExtensions().getByType(JavaPluginExtension.class);
         var sourceSets = java.getSourceSets();
         return sourceSets.maybeCreate(name);
@@ -320,6 +320,11 @@ public class ProjectSetup {
             for (String parent : loaders.get(name).getParents()) {
                 // We only need direct parents here
                 runtimeModClasses.extendsFrom(p.getConfigurations().getByName(Constants.forFeature(parent, Constants.RUNTIME_MOD_CLASSES)));
+            }
+
+            for (String parent : parents) {
+                var parentSourceSet = getOrCreateSourceSet(parent, it);
+                p.getDependencies().add(Constants.forFeature(name, Constants.COMPILE_ONLY), parentSourceSet.getOutput());
             }
 
             if (jarPresent) {
