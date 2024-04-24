@@ -12,7 +12,6 @@ import net.fabricmc.loom.task.RemapSourcesJarTask;
 import org.gradle.api.Action;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
-import org.gradle.api.artifacts.ModuleDependency;
 import org.gradle.api.artifacts.dsl.RepositoryHandler;
 import org.gradle.api.attributes.Attribute;
 import org.gradle.api.initialization.Settings;
@@ -200,9 +199,7 @@ public class ProjectSetup {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
-            var dep = (ModuleDependency) p.getDependencies().project(Map.of("path", makeKey(root, name)));
-            dep.exclude(Map.of("group", "net.fabricmc", "module", "fabric-loader"));
-            p.getDependencies().add(compileOnly, dep);
+            p.getDependencies().add(compileOnly, p.getDependencies().project(Map.of("path", makeKey(root, name))));
             exposeModClasses(name, p, set);
 
             exposeRuntimeToSubproject(name, p);
