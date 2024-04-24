@@ -1,5 +1,7 @@
 # Multisource
 
+[![Gradle Plugin Portal Version](https://img.shields.io/gradle-plugin-portal/v/dev.lukebemish.multisource?style=for-the-badge)](https://plugins.gradle.org/plugin/dev.lukebemish.multisource)
+
 Multisource is a tool for setting up a multiloader Minecraft modding development environment using source sets and feature
 variants to model different loaders. It works by allowing the definition, in the `settings.gradle`, of different source sets
 and information used to set up a subproject that uses [architectury loom](https://github.com/architectury/architectury-loom)
@@ -32,18 +34,15 @@ plugins {
 }
 
 multisource.of(':') {
-    common('main', []) {
+    configureEach {
         minecraft.add project.libs.minecraft
         mappings.add loom.officialMojangMappings()
     }
+    common('main', []) {}
     fabric('fabric', ['main']) {
-        minecraft.add project.libs.minecraft
-        mappings.add loom.officialMojangMappings()
         loader.add project.libs.fabric.loader
     }
     neoforge('neoforge', ['main']) {
-        minecraft.add project.libs.minecraft
-        mappings.add loom.officialMojangMappings()
         neoForge.add project.libs.neoforge
     }
 }

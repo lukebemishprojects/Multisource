@@ -38,6 +38,8 @@ public class ProjectSetup {
     private final List<Action<Project>> rootActions = new ArrayList<>();
     private final Map<String, LoaderSet> loaders = new HashMap<>();
     private final List<Action<RepositoryHandler>> repositories = new ArrayList<>();
+    private final List<Action<DependenciesSetup>> each = new ArrayList<>();
+    private final Map<String, List<Action<DependenciesSetup>>> eachBySet = new HashMap<>();
 
     @Inject
     ProjectSetup(String root, Settings settings) {
@@ -59,6 +61,16 @@ public class ProjectSetup {
             var repositories = p.getRepositories();
             this.repositories.forEach(r -> r.execute(repositories));
         });
+    }
+
+    public void configureEach(@ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.DependenciesSetup")
+                              @DelegatesTo(DependenciesSetup.class) Closure<?> closure) {
+        configureEach(actionOf(closure));
+    }
+
+    public void configureEach(Action<DependenciesSetup> each) {
+        this.each.add(each);
+        this.eachBySet.values().forEach(l -> l.add(each));
     }
 
     public void repositories(@ClosureParams(value = SimpleType.class, options = "org.gradle.api.artifacts.dsl.RepositoryHandler")
@@ -96,9 +108,18 @@ public class ProjectSetup {
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
+        List<Action<DependenciesSetup>> already = List.copyOf(each);
+        List<Action<DependenciesSetup>> future = new ArrayList<>();
+        eachBySet.put(name, future);
         setup.doAction(p -> {
             var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
+            for (var action : already) {
+                action.execute(dependenciesSetup);
+            }
             dependencies.execute(dependenciesSetup);
+            for (var action : future) {
+                action.execute(dependenciesSetup);
+            }
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
             p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
         });
@@ -139,6 +160,9 @@ public class ProjectSetup {
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("neoforge");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
+        List<Action<DependenciesSetup>> already = List.copyOf(each);
+        List<Action<DependenciesSetup>> future = new ArrayList<>();
+        eachBySet.put(name, future);
         setup.doAction(p -> {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             setupSubprojectConsumer(p, name, root, loom);
@@ -146,7 +170,13 @@ public class ProjectSetup {
         });
         setup.doAction(p -> {
             var dependenciesSetup = p.getObjects().newInstance(NeoforgeDependenciesSetup.class, p);
+            for (var action : already) {
+                action.execute(dependenciesSetup);
+            }
             dependencies.execute(dependenciesSetup);
+            for (var action : future) {
+                action.execute(dependenciesSetup);
+            }
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
             p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
             p.getConfigurations().maybeCreate("neoForge").fromDependencyCollector(dependenciesSetup.getNeoForge());
@@ -184,12 +214,21 @@ public class ProjectSetup {
             setupSubprojectConsumer(p, name, root, loom);
             setupSubprojectRemappingConsumer(p, name, root, loom);
         });
+        List<Action<DependenciesSetup>> already = List.copyOf(each);
+        List<Action<DependenciesSetup>> future = new ArrayList<>();
+        eachBySet.put(name, future);
         setup.doAction(p -> {
             var dependenciesSetup = p.getObjects().newInstance(FabricDependenciesSetup.class, p);
+            for (var action : already) {
+                action.execute(dependenciesSetup);
+            }
             dependencies.execute(dependenciesSetup);
+            for (var action : future) {
+                action.execute(dependenciesSetup);
+            }
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
             p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-            p.getConfigurations().maybeCreate("modCompileOnly").fromDependencyCollector(dependenciesSetup.getLoader());
+            p.getConfigurations().maybeCreate("modRunsCompileOnly").fromDependencyCollector(dependenciesSetup.getLoader());
         });
 
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
@@ -434,6 +473,7 @@ public class ProjectSetup {
             run.setIdeConfigGenerated(true);
             run.setSource(runs);
         });
+        loom.createRemapConfigurations(runs);
 
         p.getDependencies().add("runsRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_CLASSPATH_EXPOSED))));
         p.getDependencies().add("runsModClasses", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES))));
