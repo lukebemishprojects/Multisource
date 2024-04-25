@@ -37,6 +37,12 @@ public class SourceSetup {
         ext.set("loom.platform", platform);
         this.setupActionsLate.forEach(p::afterEvaluate);
         applyArchLoom(p);
+        p.getTasks().named("remapJar").configure(t -> {
+            t.setEnabled(false);
+        });
+        p.getTasks().named("remapSourcesJar").configure(t -> {
+            t.setEnabled(false);
+        });
         setupActions.forEach(d -> d.execute(p));
     }
 
