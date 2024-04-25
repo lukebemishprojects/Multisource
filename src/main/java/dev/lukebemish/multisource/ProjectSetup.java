@@ -436,6 +436,7 @@ public class ProjectSetup {
     private static void setupSubprojectRemappingConsumer(Project p, String name, String root, LoomGradleExtensionAPI loom) {
         p.getDependencies().add("modCompileOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_COMPILE_CLASSPATH))));
         p.getDependencies().add("modRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_RUNTIME_CLASSPATH))));
+        // TODO: this is broken due to loom's "include" being janky. Figure out how to fix this.
         p.getDependencies().add("include", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.INCLUDE))));
 
         var outputJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_JAR);
