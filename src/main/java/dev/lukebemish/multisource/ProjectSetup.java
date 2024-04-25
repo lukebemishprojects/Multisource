@@ -475,7 +475,7 @@ public class ProjectSetup {
         SourceSet runs = p.getExtensions().getByType(JavaPluginExtension.class).getSourceSets().maybeCreate("runs");
         Configuration runtimeModClasses = p.getConfigurations().maybeCreate(Constants.RUNTIME_MOD_CLASSES);
         p.getConfigurations().getByName("runsRuntimeClasspath").extendsFrom(p.getConfigurations().getByName(Constants.RUNTIME_CLASSPATH));
-        p.getConfigurations().getByName("runsRuntimeClasspath").extendsFrom(runtimeModClasses);
+        p.getConfigurations().getByName("runsImplementation").extendsFrom(runtimeModClasses);
 
         loom.mods(mods -> {
             var mod = mods.maybeCreate("main");
@@ -491,7 +491,7 @@ public class ProjectSetup {
         p.getDependencies().add("runsRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_CLASSPATH_EXPOSED))));
         var modClassesDep = p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.RUNTIME_MOD_CLASSES)));
         ((ModuleDependency) modClassesDep).setTransitive(false);
-        p.getDependencies().add("runsImplementation", modClassesDep);
+        p.getDependencies().add(runtimeModClasses.getName(), modClassesDep);
     }
 
     private static void exposeClasspathConfigurations(Project p) {
