@@ -22,51 +22,51 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
-public abstract class CopySingleFileTask extends DefaultTask {
+public abstract class CopyArchiveFileTask extends DefaultTask {
     @InputFiles
     @Optional
     @PathSensitive(PathSensitivity.NONE)
     public abstract ConfigurableFileCollection getInputFiles();
 
     @OutputFile
-    public abstract RegularFileProperty getOutputFile();
+    public abstract RegularFileProperty getArchiveFile();
 
     @Internal
-    public abstract Property<String> getOutputClassifier();
+    public abstract Property<String> getArchiveClassifier();
 
     @Internal
-    public abstract Property<String> getOutputExtension();
+    public abstract Property<String> getArchiveExtension();
 
     @Internal
-    public abstract DirectoryProperty getOutputDirectory();
+    public abstract DirectoryProperty getDestinationDirectory();
 
     @Internal
-    public abstract Property<String> getOutputName();
+    public abstract Property<String> getArchiveBaseName();
 
     @Internal
-    public abstract Property<String> getOutputVersion();
+    public abstract Property<String> getArchiveVersion();
 
     @Inject
-    public CopySingleFileTask() {
-        getOutputClassifier().convention("");
-        getOutputExtension().convention("jar");
-        getOutputVersion().convention(getProject().provider(() -> getProject().getVersion().toString()));
+    public CopyArchiveFileTask() {
+        getArchiveClassifier().convention("");
+        getArchiveExtension().convention("jar");
+        getArchiveVersion().convention(getProject().provider(() -> getProject().getVersion().toString()));
 
         BasePluginExtension basePluginExtension = getProject().getExtensions().getByType(BasePluginExtension.class);
-        getOutputName().convention(basePluginExtension.getArchivesName());
+        getArchiveBaseName().convention(basePluginExtension.getArchivesName());
 
-        getOutputDirectory().convention(getProject().getLayout().getBuildDirectory().dir("libs"));
+        getDestinationDirectory().convention(getProject().getLayout().getBuildDirectory().dir("libs"));
 
-        Provider<String> nameWithVersion = getOutputName().zip(getOutputVersion(), (name, version) -> name + "-" + version);
-        Provider<String> nameWithVersionWithClassifier = nameWithVersion.zip(getOutputClassifier(), (name, classifier) -> classifier.isEmpty()? name : name + "-" + classifier);
-        Provider<String> fullFileName = nameWithVersionWithClassifier.zip(getOutputExtension(), (name, extension) -> name + "." + extension);
-        getOutputFile().convention(getOutputDirectory().file(fullFileName));
+        Provider<String> nameWithVersion = getArchiveBaseName().zip(getArchiveVersion(), (name, version) -> name + "-" + version);
+        Provider<String> nameWithVersionWithClassifier = nameWithVersion.zip(getArchiveClassifier(), (name, classifier) -> classifier.isEmpty()? name : name + "-" + classifier);
+        Provider<String> fullFileName = nameWithVersionWithClassifier.zip(getArchiveExtension(), (name, extension) -> name + "." + extension);
+        getArchiveFile().convention(getDestinationDirectory().file(fullFileName));
     }
 
     @TaskAction
     public void run() {
         File input = getInputFiles().getSingleFile();
-        File output = getOutputFile().get().getAsFile();
+        File output = getArchiveFile().get().getAsFile();
         try {
             Files.copy(input.toPath(), output.toPath(), StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {

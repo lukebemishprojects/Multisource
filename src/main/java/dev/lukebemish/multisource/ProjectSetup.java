@@ -205,7 +205,7 @@ public class ProjectSetup {
     }
 
     @SuppressWarnings("UnstableApiUsage")
-    public void fabric(String name, List<String> parents, Action<FabricDependenciesSetup> dependencies) {
+    public void fabric(String name, List<String> parents, Action<DependenciesSetup> dependencies) {
         SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
@@ -219,7 +219,7 @@ public class ProjectSetup {
         List<Action<DependenciesSetup>> future = new ArrayList<>();
         eachBySet.put(name, future);
         setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(FabricDependenciesSetup.class, p);
+            var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
             for (var action : already) {
                 action.execute(dependenciesSetup);
             }
@@ -229,7 +229,6 @@ public class ProjectSetup {
             }
             p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
             p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-            p.getConfigurations().maybeCreate("modRunsCompileOnly").fromDependencyCollector(dependenciesSetup.getLoader());
         });
 
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
@@ -262,6 +261,9 @@ public class ProjectSetup {
         outputJar.setCanBeResolved(false);
         outputJar.setCanBeConsumed(true);
 
+        var remapJar = p.getTasks().register(set.getTaskName("remap", "jar"), CopyArchiveFileTask.class);
+        var remapSourcesJar = p.getTasks().register(set.getTaskName("remap", "sourcesJar"), CopyArchiveFileTask.class);
+
         p.afterEvaluate(it -> {
             boolean hasJar = it.getTasks().getNames().contains(set.getTaskName(null, "jar"));
             boolean hasSourcesJar = it.getTasks().getNames().contains(set.getTaskName(null, "sourcesJar"));
@@ -279,17 +281,17 @@ public class ProjectSetup {
                 outputJarConsumer.setTransitive(false);
                 it.getDependencies().add(outputJarConsumer.getName(), it.getDependencies().project(Map.of("path", makeKey(root, name), "configuration", Constants.OUTPUT_JAR + "Exposed")));
 
-                var remapJar = it.getTasks().register(set.getTaskName("remap", "jar"), CopySingleFileTask.class, t -> {
+                remapJar.configure(t -> {
                     t.dependsOn(outputJarConsumer);
                     t.getInputFiles().from(outputJarConsumer);
-                    t.getOutputClassifier().set(name);
+                    t.getArchiveClassifier().set(name);
                 });
                 it.getTasks().named("assemble", t -> t.dependsOn(remapJar.get()));
 
                 for (var configurationName : List.of(Constants.RUNTIME_ELEMENTS, Constants.API_ELEMENTS)) {
                     var config = it.getConfigurations().getByName(Constants.forFeature(name, configurationName));
                     config.getOutgoing().getArtifacts().clear();
-                    config.getOutgoing().artifact(remapJar.get().getOutputFile());
+                    config.getOutgoing().artifact(remapJar.get().getArchiveFile());
                 }
             }
 
@@ -307,16 +309,16 @@ public class ProjectSetup {
                 outputSourcesJarConsumer.setTransitive(false);
                 it.getDependencies().add(outputSourcesJarConsumer.getName(), it.getDependencies().project(Map.of("path", makeKey(root, name), "configuration", Constants.OUTPUT_SOURCES_JAR + "Exposed")));
 
-                var remapSourcesJar = it.getTasks().register(set.getTaskName("remap", "sourcesJar"), CopySingleFileTask.class, t -> {
+                remapSourcesJar.configure(t -> {
                     t.dependsOn(outputSourcesJarConsumer);
                     t.getInputFiles().from(outputSourcesJarConsumer);
-                    t.getOutputClassifier().set(name +"-sources");
+                    t.getArchiveClassifier().set(name +"-sources");
                 });
                 it.getTasks().named("assemble", t -> t.dependsOn(remapSourcesJar.get()));
 
                 var config = it.getConfigurations().getByName(Constants.forFeature(name, Constants.SOURCES_ELEMENTS));
                 config.getOutgoing().getArtifacts().clear();
-                config.getOutgoing().artifact(remapSourcesJar.get().getOutputFile());
+                config.getOutgoing().artifact(remapSourcesJar.get().getArchiveFile());
             }
         });
     }
@@ -328,8 +330,8 @@ public class ProjectSetup {
     }
 
     public void fabric(String name, List<String> parents,
-                       @ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.FabricDependenciesSetup")
-                       @DelegatesTo(FabricDependenciesSetup.class)
+                       @ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.DependenciesSetup")
+                       @DelegatesTo(DependenciesSetup.class)
                        Closure<?> dependencies
     ) {
         fabric(name, parents, actionOf(dependencies));
