@@ -39,9 +39,7 @@ multisource.of(':') {
         mappings.add loom.officialMojangMappings()
     }
     common('main', []) {}
-    fabric('fabric', ['main']) {
-        loader.add project.libs.fabric.loader
-    }
+    fabric('fabric', ['main']) {}
     neoforge('neoforge', ['main']) {
         neoForge.add project.libs.neoforge
     }
