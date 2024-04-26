@@ -1,5 +1,6 @@
 package dev.lukebemish.multisource;
 
+import dev.lukebemish.multisource.jarinjar.JarInJar;
 import groovy.lang.Closure;
 import groovy.lang.DelegatesTo;
 import groovy.transform.stc.ClosureParams;
@@ -201,12 +202,14 @@ public class ProjectSetup {
             setupIncludeConfiguration(p, set);
 
             pullSubprojectRemappedJars(name, p, set);
+            p.getTasks().named(set.getTaskName("remap", "jar"), JarInJar.class, t -> {
+                t.getMakeNeoMetadata().set(true);
+            });
         });
     }
 
     @SuppressWarnings("UnstableApiUsage")
-    public void fabric(String name, List<String> parents, Action<DependenciesSetup> dependencies) {
-        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+    public void fabric(String name, List<String> parents, Action<DependenciesSetup> dependencies) {SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
@@ -249,10 +252,15 @@ public class ProjectSetup {
             setupRemapConfigurations(p, set);
 
             pullSubprojectRemappedJars(name, p, set);
+            p.getTasks().named(set.getTaskName("remap", "jar"), JarInJar.class, t -> {
+                t.getMakeFabricJsons().set(true);
+            });
         });
     }
 
     private void pullSubprojectRemappedJars(String name, Project p, SourceSet set) {
+        var include = p.getConfigurations().getByName(set.getTaskName(null, Constants.INCLUDE));
+
         var outputSourcesJar = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.OUTPUT_SOURCES_JAR));
         outputSourcesJar.setCanBeResolved(false);
         outputSourcesJar.setCanBeConsumed(true);
@@ -261,7 +269,7 @@ public class ProjectSetup {
         outputJar.setCanBeResolved(false);
         outputJar.setCanBeConsumed(true);
 
-        var remapJar = p.getTasks().register(set.getTaskName("remap", "jar"), CopyArchiveFileTask.class);
+        var remapJar = p.getTasks().register(set.getTaskName("remap", "jar"), JarInJar.class);
         var remapSourcesJar = p.getTasks().register(set.getTaskName("remap", "sourcesJar"), CopyArchiveFileTask.class);
 
         p.afterEvaluate(it -> {
@@ -284,6 +292,7 @@ public class ProjectSetup {
                 remapJar.configure(t -> {
                     t.dependsOn(outputJarConsumer);
                     t.getInputFiles().from(outputJarConsumer);
+                    t.configuration(include);
                     t.getArchiveClassifier().set(name);
                 });
                 it.getTasks().named("assemble", t -> t.dependsOn(remapJar.get()));
@@ -436,8 +445,6 @@ public class ProjectSetup {
     private static void setupSubprojectRemappingConsumer(Project p, String name, String root, LoomGradleExtensionAPI loom) {
         p.getDependencies().add("modCompileOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_COMPILE_CLASSPATH))));
         p.getDependencies().add("modRuntimeOnly", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.TO_REMAP_RUNTIME_CLASSPATH))));
-        // TODO: this is broken due to loom's "include" being janky. Figure out how to fix this.
-        p.getDependencies().add("include", p.getDependencies().project(Map.of("path", root, "configuration", Constants.forFeature(name, Constants.INCLUDE))));
 
         var outputJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_JAR);
         var outputSourcesJar = p.getConfigurations().maybeCreate(Constants.OUTPUT_SOURCES_JAR);
@@ -555,8 +562,9 @@ public class ProjectSetup {
 
     private static void setupIncludeConfiguration(Project p, SourceSet sourceSet) {
         var include = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.INCLUDE));
-        include.setCanBeResolved(false);
-        include.setCanBeConsumed(true);
+        include.setCanBeResolved(true);
+        include.setCanBeConsumed(false);
+        include.setTransitive(false);
         var toRemapRuntime = p.getConfigurations().maybeCreate(sourceSet.getTaskName(null, Constants.TO_REMAP_RUNTIME_CLASSPATH));
         toRemapRuntime.setCanBeResolved(false);
         toRemapRuntime.setCanBeConsumed(true);

@@ -114,4 +114,8 @@ gradlePlugin {
 dependencies {
     gradleApi()
     api 'dev.architectury.loom:dev.architectury.loom.gradle.plugin:1.6.394'
+    api 'org.apache.maven:maven-artifact:3.9.6'
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'com.google.guava:guava:33.0.0-jre'
+    implementation 'commons-io:commons-io:2.15.1'
 }
