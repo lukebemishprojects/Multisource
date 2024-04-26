@@ -70,36 +70,38 @@ public abstract class JarInJar extends CopyArchiveFileTask {
         List<ResolvedNestedJar> includedJars = getJarJarArtifacts().getResolvedArtifacts().get();
         Map<String, ByteProvider> entries = Maps.newHashMap();
         if (getMakeFabricJsons().get()) {
-            try (ZipFile original = new ZipFile(getArchiveFile().get().getAsFile())) {
-                var fmj = original.getEntry("fabric.mod.json");
-                if (fmj != null) {
-                    try (var is = original.getInputStream(fmj);
-                         var reader = new InputStreamReader(is)) {
-                        var json = GSON.fromJson(reader, JsonObject.class);
-                        JsonArray jars;
-                        if (json.has("jars")) {
-                            jars = json.getAsJsonArray("jars");
-                        } else {
-                            jars = new JsonArray();
-                        }
-                        for (var jar : includedJars) {
-                            JsonObject nestedJarEntry = new JsonObject();
-                            nestedJarEntry.addProperty("file", "META-INF/jars/"+jar.getFile().getName());
-                            jars.add(nestedJarEntry);
-                        }
-                        json.remove("jars");
-                        json.add("jars", jars);
-                        byte[] bytes = GSON.toJson(json).getBytes(StandardCharsets.UTF_8);
-                        entries.put("fabric.mod.json", new ByteProvider.DirectProvider(bytes));
-                    } catch (Exception ignored) {
-                        // Could not parse FMJ?
-                        getLogger().warn("Could not parse fabric.mod.json from the original jar, ignoring.");
-                    }
-                }
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
             includedJars.forEach(jar -> entries.put("META-INF/jars/"+jar.getFile().getName(), new ByteProvider.FileProvider(addFabricJsonIfMissing(jar))));
+            if (!includedJars.isEmpty()) {
+                try (ZipFile original = new ZipFile(getArchiveFile().get().getAsFile())) {
+                    var fmj = original.getEntry("fabric.mod.json");
+                    if (fmj != null) {
+                        try (var is = original.getInputStream(fmj);
+                             var reader = new InputStreamReader(is)) {
+                            var json = GSON.fromJson(reader, JsonObject.class);
+                            JsonArray jars;
+                            if (json.has("jars")) {
+                                jars = json.getAsJsonArray("jars");
+                            } else {
+                                jars = new JsonArray();
+                            }
+                            for (var jar : includedJars) {
+                                JsonObject nestedJarEntry = new JsonObject();
+                                nestedJarEntry.addProperty("file", "META-INF/jars/" + jar.getFile().getName());
+                                jars.add(nestedJarEntry);
+                            }
+                            json.remove("jars");
+                            json.add("jars", jars);
+                            byte[] bytes = GSON.toJson(json).getBytes(StandardCharsets.UTF_8);
+                            entries.put("fabric.mod.json", new ByteProvider.DirectProvider(bytes));
+                        } catch (Exception ignored) {
+                            // Could not parse FMJ?
+                            getLogger().warn("Could not parse fabric.mod.json from the original jar, ignoring.");
+                        }
+                    }
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
         } else {
             includedJars.forEach(jar -> entries.put("META-INF/jars/"+jar.getFile().getName(), new ByteProvider.FileProvider(jar.getFile())));
         }
