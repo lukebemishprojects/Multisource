@@ -43,11 +43,12 @@ public class ProjectSetup {
     private final List<Action<DependenciesSetup>> each = new ArrayList<>();
     private final Map<String, List<Action<DependenciesSetup>>> eachBySet = new HashMap<>();
 
+    @SuppressWarnings("UnstableApiUsage")
     @Inject
     ProjectSetup(String root, Settings settings) {
         this.root = root;
         this.settings = settings;
-        settings.getGradle().beforeProject(p -> {
+        settings.getGradle().getLifecycle().beforeProject(p -> {
             if (p.getPath().equals(root)) {
                 rootActions.forEach(a -> a.execute(p));
             }

@@ -14,9 +14,9 @@ public class SourceSetup {
     private final String project;
     private final String name;
     private final List<Action<Project>> setupActions = new ArrayList<>();
-    private final List<Action<Project>> setupActionsLate = new ArrayList<>();
     private String platform = "fabric";
 
+    @SuppressWarnings("UnstableApiUsage")
     @Inject
     SourceSetup(String project, String name, Settings settings) {
         this.project = project;
@@ -25,7 +25,7 @@ public class SourceSetup {
 
         String key = (project.equals(":") ? "" : project) + ":" + name;
         settings.include(key);
-        settings.getGradle().beforeProject(p -> {
+        settings.getGradle().getLifecycle().beforeProject(p -> {
             if (p.getPath().equals(key)) {
                 executeOnProject(p);
             }
@@ -35,7 +35,6 @@ public class SourceSetup {
     private void executeOnProject(Project p) {
         ExtraPropertiesExtension ext = p.getExtensions().getExtraProperties();
         ext.set("loom.platform", platform);
-        this.setupActionsLate.forEach(p::afterEvaluate);
         applyArchLoom(p);
         p.getTasks().named("remapJar").configure(t -> {
             t.setEnabled(false);
