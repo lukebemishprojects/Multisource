@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class SourceSetup {
-    private final Settings settings;
     private final String project;
     private final String name;
     private final List<Action<Project>> setupActions = new ArrayList<>();
@@ -20,7 +19,6 @@ public class SourceSetup {
     @Inject
     SourceSetup(String project, String name, Settings settings) {
         this.project = project;
-        this.settings = settings;
         this.name = name;
 
         String key = (project.equals(":") ? "" : project) + ":" + name;

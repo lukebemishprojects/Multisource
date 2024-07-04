@@ -43,16 +43,11 @@ public class ProjectSetup {
     private final List<Action<DependenciesSetup>> each = new ArrayList<>();
     private final Map<String, List<Action<DependenciesSetup>>> eachBySet = new HashMap<>();
 
-    @SuppressWarnings("UnstableApiUsage")
     @Inject
     ProjectSetup(String root, Settings settings) {
         this.root = root;
         this.settings = settings;
-        settings.getGradle().getLifecycle().beforeProject(p -> {
-            if (p.getPath().equals(root)) {
-                rootActions.forEach(a -> a.execute(p));
-            }
-        });
+        setupCallback(root, settings, rootActions);
         repositories.add(Constants::neoMaven);
         rootActions.add(p -> {
             p.getPluginManager().apply(LoomRepositoryPlugin.class);
@@ -63,6 +58,15 @@ public class ProjectSetup {
         rootActions.add(p -> {
             var repositories = p.getRepositories();
             this.repositories.forEach(r -> r.execute(repositories));
+        });
+    }
+
+    @SuppressWarnings("UnstableApiUsage")
+    private static void setupCallback(String root, Settings settings, List<Action<Project>> rootActions) {
+        settings.getGradle().getLifecycle().beforeProject(p -> {
+            if (p.getPath().equals(root)) {
+                rootActions.forEach(a -> a.execute(p));
+            }
         });
     }
 
