@@ -34,28 +34,36 @@ import java.util.Objects;
 import java.util.Set;
 
 public class ProjectSetup {
-    private final Settings settings;
     private final String root;
-    private final Map<String, SourceSetup> sources = new HashMap<>();
-    private final List<Action<Project>> rootActions = new ArrayList<>();
     private final Map<String, LoaderSet> loaders = new HashMap<>();
     private final List<Action<RepositoryHandler>> repositories = new ArrayList<>();
-    private final List<Action<DependenciesSetup>> each = new ArrayList<>();
-    private final Map<String, List<Action<DependenciesSetup>>> eachBySet = new HashMap<>();
+    private final transient Context context;
+
+    private static final class Context {
+        private final List<Action<Project>> rootActions = new ArrayList<>();
+        private final Settings settings;
+        private final Map<String, SourceSetup> sources = new HashMap<>();
+        private final List<Action<DependenciesSetup>> each = new ArrayList<>();
+        private final Map<String, List<Action<DependenciesSetup>>> eachBySet = new HashMap<>();
+
+        private Context(Settings settings) {
+            this.settings = settings;
+        }
+    }
 
     @Inject
     ProjectSetup(String root, Settings settings) {
         this.root = root;
-        this.settings = settings;
-        setupCallback(root, settings, rootActions);
+        this.context = new Context(settings);
+        setupCallback(root, settings, context.rootActions);
         repositories.add(Constants::neoMaven);
-        rootActions.add(p -> {
+        context.rootActions.add(p -> {
             p.getPluginManager().apply(LoomRepositoryPlugin.class);
         });
-        rootActions.add(p -> {
+        context.rootActions.add(p -> {
             p.getPlugins().apply("java-library");
         });
-        rootActions.add(p -> {
+        context.rootActions.add(p -> {
             var repositories = p.getRepositories();
             this.repositories.forEach(r -> r.execute(repositories));
         });
@@ -76,8 +84,8 @@ public class ProjectSetup {
     }
 
     public void configureEach(Action<DependenciesSetup> each) {
-        this.each.add(each);
-        this.eachBySet.values().forEach(l -> l.add(each));
+        this.context.each.add(each);
+        this.context.eachBySet.values().forEach(l -> l.add(each));
     }
 
     public void repositories(@ClosureParams(value = SimpleType.class, options = "org.gradle.api.artifacts.dsl.RepositoryHandler")
@@ -111,13 +119,13 @@ public class ProjectSetup {
 
     @SuppressWarnings("UnstableApiUsage")
     public void common(String name, List<String> parents, Action<DependenciesSetup> dependencies) {
-        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        SourceSetup setup = context.sources.computeIfAbsent(name, s -> new SourceSetup(root, name, context.settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        List<Action<DependenciesSetup>> already = List.copyOf(each);
+        List<Action<DependenciesSetup>> already = List.copyOf(context.each);
         List<Action<DependenciesSetup>> future = new ArrayList<>();
-        eachBySet.put(name, future);
+        context.eachBySet.put(name, future);
         setup.doAction(p -> {
             var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
             for (var action : already) {
@@ -139,7 +147,7 @@ public class ProjectSetup {
             loom.getRunConfigs().configureEach(run -> run.setIdeConfigGenerated(false));
         });
 
-        rootActions.add(p -> {
+        context.rootActions.add(p -> {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
@@ -163,13 +171,13 @@ public class ProjectSetup {
 
     @SuppressWarnings("UnstableApiUsage")
     public void neoforge(String name, List<String> parents, Action<NeoforgeDependenciesSetup> dependencies) {
-        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        SourceSetup setup = context.sources.computeIfAbsent(name, s -> new SourceSetup(root, name, context.settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("neoforge");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        List<Action<DependenciesSetup>> already = List.copyOf(each);
+        List<Action<DependenciesSetup>> already = List.copyOf(context.each);
         List<Action<DependenciesSetup>> future = new ArrayList<>();
-        eachBySet.put(name, future);
+        context.eachBySet.put(name, future);
         setup.doAction(p -> {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             setupSubprojectConsumer(p, name, root, loom);
@@ -192,7 +200,7 @@ public class ProjectSetup {
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
         parents.forEach(loader::parent);
 
-        rootActions.add(p -> {
+        context.rootActions.add(p -> {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
@@ -214,7 +222,7 @@ public class ProjectSetup {
     }
 
     @SuppressWarnings("UnstableApiUsage")
-    public void fabric(String name, List<String> parents, Action<DependenciesSetup> dependencies) {SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+    public void fabric(String name, List<String> parents, Action<DependenciesSetup> dependencies) {SourceSetup setup = context.sources.computeIfAbsent(name, s -> new SourceSetup(root, name, context.settings));
         setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
         setup.setPlatform("fabric");
         setup.doAction(ProjectSetup::exposeClasspathConfigurations);
@@ -223,9 +231,9 @@ public class ProjectSetup {
             setupSubprojectConsumer(p, name, root, loom);
             setupSubprojectRemappingConsumer(p, name, root, loom);
         });
-        List<Action<DependenciesSetup>> already = List.copyOf(each);
+        List<Action<DependenciesSetup>> already = List.copyOf(context.each);
         List<Action<DependenciesSetup>> future = new ArrayList<>();
-        eachBySet.put(name, future);
+        context.eachBySet.put(name, future);
         setup.doAction(p -> {
             var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
             for (var action : already) {
@@ -242,7 +250,7 @@ public class ProjectSetup {
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
         parents.forEach(loader::parent);
 
-        rootActions.add(p -> {
+        context.rootActions.add(p -> {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
