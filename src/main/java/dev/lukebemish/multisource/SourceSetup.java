@@ -1,6 +1,6 @@
 package dev.lukebemish.multisource;
 
-import org.gradle.api.Action;
+import org.gradle.api.IsolatedAction;
 import org.gradle.api.Project;
 import org.gradle.api.initialization.Settings;
 import org.gradle.api.plugins.ExtraPropertiesExtension;
@@ -9,10 +9,11 @@ import javax.inject.Inject;
 import java.util.ArrayList;
 import java.util.List;
 
+@SuppressWarnings("UnstableApiUsage")
 public class SourceSetup {
     private final String project;
     private final String name;
-    private final List<Action<Project>> setupActions = new ArrayList<>();
+    private final List<IsolatedAction<Project>> setupActions = new ArrayList<>();
     private String platform = "fabric";
 
     @SuppressWarnings("UnstableApiUsage")
@@ -30,6 +31,7 @@ public class SourceSetup {
         });
     }
 
+    @SuppressWarnings("UnstableApiUsage")
     private void executeOnProject(Project p) {
         ExtraPropertiesExtension ext = p.getExtensions().getExtraProperties();
         ext.set("loom.platform", platform);
@@ -47,7 +49,8 @@ public class SourceSetup {
         this.platform = platform;
     }
 
-    public void doAction(Action<Project> dependencies) {
+    @SuppressWarnings("UnstableApiUsage")
+    public void doAction(IsolatedAction<Project> dependencies) {
         this.setupActions.add(dependencies);
     }
 

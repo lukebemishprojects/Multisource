@@ -1,0 +1,46 @@
+pluginManagement {
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        maven {
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/'
+        }
+        maven {
+            name = "Luke's Maven"
+            url = 'https://maven.lukebemish.dev/releases/'
+        }
+        maven {
+            name = 'Architectury'
+            url "https://maven.architectury.dev/"
+        }
+
+        mavenCentral()
+        gradlePluginPortal()
+    }
+
+    includeBuild '../'
+}
+
+plugins {
+    id 'dev.lukebemish.multisource'
+}
+
+rootProject.name = 'multisourcetest'
+
+multisource.of(':') {
+    configureEach {
+        minecraft.add "com.mojang:minecraft:1.21.1"
+        mappings.add loom.officialMojangMappings()
+    }
+    common('main', []) {}
+    fabric('fabric', ['main']) {}
+    neoforge('neoforge', ['main']) {
+        neoForge.add "net.neoforged:neoforge:21.1.31"
+    }
+    repositories {
+        mavenCentral()
+    }
+}

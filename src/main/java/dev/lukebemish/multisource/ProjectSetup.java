@@ -10,7 +10,7 @@ import net.fabricmc.loom.api.LoomGradleExtensionAPI;
 import net.fabricmc.loom.api.RemapConfigurationSettings;
 import net.fabricmc.loom.task.RemapJarTask;
 import net.fabricmc.loom.task.RemapSourcesJarTask;
-import org.gradle.api.Action;
+import org.gradle.api.IsolatedAction;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.ModuleDependency;
@@ -18,6 +18,7 @@ import org.gradle.api.artifacts.dsl.RepositoryHandler;
 import org.gradle.api.attributes.Attribute;
 import org.gradle.api.initialization.Settings;
 import org.gradle.api.plugins.JavaPluginExtension;
+import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.SourceSet;
 import org.gradle.api.tasks.bundling.Jar;
 import org.gradle.api.tasks.javadoc.Javadoc;
@@ -33,49 +34,69 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
+@SuppressWarnings("UnstableApiUsage")
 public class ProjectSetup {
     private final String root;
     private final Map<String, LoaderSet> loaders = new HashMap<>();
-    private final List<Action<RepositoryHandler>> repositories = new ArrayList<>();
-    private final transient Context context;
+    private final List<IsolatedAction<RepositoryHandler>> repositories = new ArrayList<>();
+    private final List<IsolatedAction<Project>> rootActions = new ArrayList<>();
+    private final Map<String, SourceSetup> sources = new HashMap<>();
+    private final List<IsolatedAction<DependenciesSetup>> each = new ArrayList<>();
 
-    private static final class Context {
-        private final List<Action<Project>> rootActions = new ArrayList<>();
-        private final Settings settings;
-        private final Map<String, SourceSetup> sources = new HashMap<>();
-        private final List<Action<DependenciesSetup>> each = new ArrayList<>();
-        private final Map<String, List<Action<DependenciesSetup>>> eachBySet = new HashMap<>();
+    private final Map<String, List<IsolatedAction<DependenciesSetup>>> eachBySet = new HashMap<>();
+    private final Settings settings;
 
-        private Context(Settings settings) {
-            this.settings = settings;
+    private static class PluginsSetupAction implements IsolatedAction<Project> {
+        @Override
+        public void execute(Project project) {
+            project.getPluginManager().apply(LoomRepositoryPlugin.class);
+            project.getPluginManager().apply("java-library");
+        }
+    }
+
+    private static class SingleProjectAction implements IsolatedAction<Project> {
+        private final List<IsolatedAction<Project>> actions;
+        private final String path;
+
+        private SingleProjectAction(List<IsolatedAction<Project>> actions, String path) {
+            this.actions = actions;
+            this.path = path;
+        }
+
+        @Override
+        public void execute(Project project) {
+            if (project.getPath().equals(this.path)) {
+                this.actions.forEach(a -> a.execute(project));
+            }
+        }
+    }
+
+    private static class RepositoriesSetupAction implements IsolatedAction<Project> {
+        private final List<IsolatedAction<RepositoryHandler>> actions;
+
+        private RepositoriesSetupAction(List<IsolatedAction<RepositoryHandler>> actions) {
+            this.actions = actions;
+        }
+
+        @Override
+        public void execute(Project project) {
+            var repositories = project.getRepositories();
+            this.actions.forEach(a -> a.execute(repositories));
         }
     }
 
     @Inject
     ProjectSetup(String root, Settings settings) {
         this.root = root;
-        this.context = new Context(settings);
-        setupCallback(root, settings, context.rootActions);
+        this.settings = settings;
+        setupCallback(root, settings, rootActions);
         repositories.add(Constants::neoMaven);
-        context.rootActions.add(p -> {
-            p.getPluginManager().apply(LoomRepositoryPlugin.class);
-        });
-        context.rootActions.add(p -> {
-            p.getPlugins().apply("java-library");
-        });
-        context.rootActions.add(p -> {
-            var repositories = p.getRepositories();
-            this.repositories.forEach(r -> r.execute(repositories));
-        });
+        rootActions.add(new PluginsSetupAction());
+        rootActions.add(new RepositoriesSetupAction(repositories));
     }
 
-    @SuppressWarnings("UnstableApiUsage")
-    private static void setupCallback(String root, Settings settings, List<Action<Project>> rootActions) {
-        settings.getGradle().getLifecycle().beforeProject(p -> {
-            if (p.getPath().equals(root)) {
-                rootActions.forEach(a -> a.execute(p));
-            }
-        });
+    private static void setupCallback(String root, Settings settings, List<IsolatedAction<Project>> rootActions) {
+        settings.getGradle().getLifecycle().beforeProject(new SingleProjectAction(rootActions, root));
     }
 
     public void configureEach(@ClosureParams(value = SimpleType.class, options = "dev.lukebemish.multiloader.DependenciesSetup")
@@ -83,9 +104,9 @@ public class ProjectSetup {
         configureEach(actionOf(closure));
     }
 
-    public void configureEach(Action<DependenciesSetup> each) {
-        this.context.each.add(each);
-        this.context.eachBySet.values().forEach(l -> l.add(each));
+    public void configureEach(IsolatedAction<DependenciesSetup> each) {
+        this.each.add(each);
+        this.eachBySet.values().forEach(l -> l.add(each));
     }
 
     public void repositories(@ClosureParams(value = SimpleType.class, options = "org.gradle.api.artifacts.dsl.RepositoryHandler")
@@ -93,7 +114,7 @@ public class ProjectSetup {
         repositories(actionOf(closure));
     }
 
-    public void repositories(Action<RepositoryHandler> repositories) {
+    public void repositories(IsolatedAction<RepositoryHandler> repositories) {
         this.repositories.add(repositories);
     }
 
@@ -113,41 +134,76 @@ public class ProjectSetup {
         common(name, actionOf(dependencies));
     }
 
-    public void common(String name, Action<DependenciesSetup> dependencies) {
+    public void common(String name, IsolatedAction<DependenciesSetup> dependencies) {
         common(name, List.of(), dependencies);
     }
 
-    @SuppressWarnings("UnstableApiUsage")
-    public void common(String name, List<String> parents, Action<DependenciesSetup> dependencies) {
-        SourceSetup setup = context.sources.computeIfAbsent(name, s -> new SourceSetup(root, name, context.settings));
-        setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
-        setup.setPlatform("fabric");
-        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        List<Action<DependenciesSetup>> already = List.copyOf(context.each);
-        List<Action<DependenciesSetup>> future = new ArrayList<>();
-        context.eachBySet.put(name, future);
-        setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
+    private static final class DependenciesAction<T extends DependenciesSetup> implements IsolatedAction<Project> {
+        private final Class<T> type;
+        @Nested
+        private final List<IsolatedAction<DependenciesSetup>> already;
+        @Nested
+        private final IsolatedAction<T> action;
+        @Nested
+        private final List<IsolatedAction<DependenciesSetup>> future;
+        @Nested
+        private final IsolatedAction<T> staticSetup;
+
+        private DependenciesAction(Class<T> type, List<IsolatedAction<DependenciesSetup>> already, IsolatedAction<T> action, List<IsolatedAction<DependenciesSetup>> future, IsolatedAction<T> staticSetup) {
+            this.type = type;
+            this.already = already;
+            this.action = action;
+            this.future = future;
+            this.staticSetup = staticSetup;
+        }
+
+        @Override
+        public void execute(Project project) {
+            var dependenciesSetup = project.getObjects().newInstance(type, project);
             for (var action : already) {
                 action.execute(dependenciesSetup);
             }
-            dependencies.execute(dependenciesSetup);
+            action.execute(dependenciesSetup);
             for (var action : future) {
                 action.execute(dependenciesSetup);
             }
-            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
-            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-        });
+            staticSetup.execute(dependenciesSetup);
+        }
+    }
+
+    public void common(String name, List<String> parents, IsolatedAction<DependenciesSetup> dependencies) {
+        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.doAction(new RepositoriesSetupAction(repositories));
+        setup.setPlatform("fabric");
+        setup.doAction(exposeClasspathConfigurations());
+        List<IsolatedAction<DependenciesSetup>> already = new ArrayList<>(each);
+        List<IsolatedAction<DependenciesSetup>> future = new ArrayList<>();
+        eachBySet.put(name, future);
+        setup.doAction(new DependenciesAction<>(
+            DependenciesSetup.class,
+            already,
+            dependencies,
+            future,
+            dependenciesSetupCollector()
+        ));
 
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
         parents.forEach(loader::parent);
 
-        setup.doAction(p -> {
+        setup.doAction(disableIdeRuns());
+
+        rootActions.add(configureCommonRoot(name, root, loaders));
+    }
+
+    private static IsolatedAction<Project> disableIdeRuns() {
+        return p -> {
             var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
             loom.getRunConfigs().configureEach(run -> run.setIdeConfigGenerated(false));
-        });
+        };
+    }
 
-        context.rootActions.add(p -> {
+    private static IsolatedAction<Project> configureCommonRoot(String name, String root, Map<String, LoaderSet> loaders) {
+        return p -> {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
@@ -158,7 +214,7 @@ public class ProjectSetup {
             setupParents(p, name, loaders);
 
             setupCoreConfigurations(p, set);
-        });
+        };
     }
 
     public void neoforge(String name, List<String> parents,
@@ -169,38 +225,48 @@ public class ProjectSetup {
         neoforge(name, parents, actionOf(dependencies));
     }
 
-    @SuppressWarnings("UnstableApiUsage")
-    public void neoforge(String name, List<String> parents, Action<NeoforgeDependenciesSetup> dependencies) {
-        SourceSetup setup = context.sources.computeIfAbsent(name, s -> new SourceSetup(root, name, context.settings));
-        setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
+    public void neoforge(String name, List<String> parents, IsolatedAction<NeoforgeDependenciesSetup> dependencies) {
+        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.doAction(new RepositoriesSetupAction(repositories));
         setup.setPlatform("neoforge");
-        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        List<Action<DependenciesSetup>> already = List.copyOf(context.each);
-        List<Action<DependenciesSetup>> future = new ArrayList<>();
-        context.eachBySet.put(name, future);
-        setup.doAction(p -> {
-            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
-            setupSubprojectConsumer(p, name, root, loom);
-            setupSubprojectRemappingConsumer(p, name, root, loom);
-        });
-        setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(NeoforgeDependenciesSetup.class, p);
-            for (var action : already) {
-                action.execute(dependenciesSetup);
-            }
-            dependencies.execute(dependenciesSetup);
-            for (var action : future) {
-                action.execute(dependenciesSetup);
-            }
-            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
-            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-            p.getConfigurations().maybeCreate("neoForge").fromDependencyCollector(dependenciesSetup.getNeoForge());
-        });
+        setup.doAction(exposeClasspathConfigurations());
+        List<IsolatedAction<DependenciesSetup>> already = new ArrayList<>(each);
+        List<IsolatedAction<DependenciesSetup>> future = new ArrayList<>();
+        eachBySet.put(name, future);
+        setup.doAction(subprojectRemappingSetup(name, root));
+        setup.doAction(new DependenciesAction<>(
+            NeoforgeDependenciesSetup.class,
+            already,
+            dependencies,
+            future,
+            neoDependenciesSetupCollector()
+        ));
 
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
         parents.forEach(loader::parent);
 
-        context.rootActions.add(p -> {
+        rootActions.add(configureNeoRoot(name, root, loaders));
+    }
+
+    private static IsolatedAction<NeoforgeDependenciesSetup> neoDependenciesSetupCollector() {
+        return dependenciesSetup -> {
+            var p = dependenciesSetup.getProject();
+            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
+            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
+            p.getConfigurations().maybeCreate("neoForge").fromDependencyCollector(dependenciesSetup.getNeoForge());
+        };
+    }
+
+    private static IsolatedAction<Project> subprojectRemappingSetup(String name, String root) {
+        return p -> {
+            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
+            setupSubprojectConsumer(p, name, root, loom);
+            setupSubprojectRemappingConsumer(p, name, root, loom);
+        };
+    }
+
+    private static IsolatedAction<Project> configureNeoRoot(String name, String root, Map<String, LoaderSet> loaders) {
+        return p -> {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
@@ -214,43 +280,46 @@ public class ProjectSetup {
             setupCoreConfigurations(p, set);
             setupIncludeConfiguration(p, set);
 
-            pullSubprojectRemappedJars(name, p, set);
+            pullSubprojectRemappedJars(root, name, p, set);
             p.getTasks().named(set.getTaskName("remap", "jar"), JarInJar.class, t -> {
                 t.getMakeNeoMetadata().set(true);
             });
-        });
+        };
     }
 
-    @SuppressWarnings("UnstableApiUsage")
-    public void fabric(String name, List<String> parents, Action<DependenciesSetup> dependencies) {SourceSetup setup = context.sources.computeIfAbsent(name, s -> new SourceSetup(root, name, context.settings));
-        setup.doAction(p -> repositories.forEach(a -> a.execute(p.getRepositories())));
+    public void fabric(String name, List<String> parents, IsolatedAction<DependenciesSetup> dependencies) {
+        SourceSetup setup = sources.computeIfAbsent(name, s -> new SourceSetup(root, name, settings));
+        setup.doAction(new RepositoriesSetupAction(repositories));
         setup.setPlatform("fabric");
-        setup.doAction(ProjectSetup::exposeClasspathConfigurations);
-        setup.doAction(p -> {
-            var loom = p.getExtensions().getByType(LoomGradleExtensionAPI.class);
-            setupSubprojectConsumer(p, name, root, loom);
-            setupSubprojectRemappingConsumer(p, name, root, loom);
-        });
-        List<Action<DependenciesSetup>> already = List.copyOf(context.each);
-        List<Action<DependenciesSetup>> future = new ArrayList<>();
-        context.eachBySet.put(name, future);
-        setup.doAction(p -> {
-            var dependenciesSetup = p.getObjects().newInstance(DependenciesSetup.class, p);
-            for (var action : already) {
-                action.execute(dependenciesSetup);
-            }
-            dependencies.execute(dependenciesSetup);
-            for (var action : future) {
-                action.execute(dependenciesSetup);
-            }
-            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
-            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
-        });
+        setup.doAction(exposeClasspathConfigurations());
+        setup.doAction(subprojectRemappingSetup(name, root));
+        List<IsolatedAction<DependenciesSetup>> already = new ArrayList<>(each);
+        List<IsolatedAction<DependenciesSetup>> future = new ArrayList<>();
+        eachBySet.put(name, future);
+        setup.doAction(new DependenciesAction<>(
+            DependenciesSetup.class,
+            already,
+            dependencies,
+            future,
+            dependenciesSetupCollector()
+        ));
 
         var loader = loaders.computeIfAbsent(name, LoaderSet::new);
         parents.forEach(loader::parent);
 
-        context.rootActions.add(p -> {
+        rootActions.add(configureFabricRoot(name, root, loaders));
+    }
+
+    private static IsolatedAction<DependenciesSetup> dependenciesSetupCollector() {
+        return dependenciesSetup -> {
+            var p = dependenciesSetup.getProject();
+            p.getConfigurations().maybeCreate("minecraft").fromDependencyCollector(dependenciesSetup.getMinecraft());
+            p.getConfigurations().maybeCreate("mappings").fromDependencyCollector(dependenciesSetup.getMappings());
+        };
+    }
+
+    private static IsolatedAction<Project> configureFabricRoot(String name, String root, Map<String, LoaderSet> loaders) {
+        return p -> {
             var set = getOrCreateSourceSet(name, p);
 
             var compileOnly = Constants.forFeature(name, "compileOnly");
@@ -264,14 +333,14 @@ public class ProjectSetup {
             setupCoreConfigurations(p, set);
             setupRemapConfigurations(p, set);
 
-            pullSubprojectRemappedJars(name, p, set);
+            pullSubprojectRemappedJars(root, name, p, set);
             p.getTasks().named(set.getTaskName("remap", "jar"), JarInJar.class, t -> {
                 t.getMakeFabricJsons().set(true);
             });
-        });
+        };
     }
 
-    private void pullSubprojectRemappedJars(String name, Project p, SourceSet set) {
+    private static void pullSubprojectRemappedJars(String root, String name, Project p, SourceSet set) {
         var include = p.getConfigurations().getByName(set.getTaskName(null, Constants.INCLUDE));
 
         var outputSourcesJar = p.getConfigurations().maybeCreate(Constants.forFeature(name, Constants.OUTPUT_SOURCES_JAR));
@@ -448,7 +517,7 @@ public class ProjectSetup {
         runtimeClasspathExposed.setCanBeResolved(false);
     }
 
-    private Object makeKey(String root, String name) {
+    private static String makeKey(String root, String name) {
         if (root.equals(":")) {
             return ":" + name;
         }
@@ -517,27 +586,29 @@ public class ProjectSetup {
         p.getDependencies().add(runtimeModClasses.getName(), modClassesDep);
     }
 
-    private static void exposeClasspathConfigurations(Project p) {
-        var configurations = p.getConfigurations();
+    private static IsolatedAction<Project> exposeClasspathConfigurations() {
+        return p -> {
+            var configurations = p.getConfigurations();
 
-        var runtimeElements = configurations.maybeCreate(Constants.RUNTIME_ELEMENTS);
-        var apiElements = configurations.maybeCreate(Constants.API_ELEMENTS);
-        var runtimeClasspath = configurations.maybeCreate(Constants.RUNTIME_CLASSPATH);
-        var compileClasspath = configurations.maybeCreate(Constants.COMPILE_CLASSPATH);
-        var runtimeClasspathExposed = configurations.maybeCreate(Constants.RUNTIME_CLASSPATH_EXPOSED);
-        var compileClasspathExposed = configurations.maybeCreate(Constants.COMPILE_CLASSPATH_EXPOSED);
+            var runtimeElements = configurations.maybeCreate(Constants.RUNTIME_ELEMENTS);
+            var apiElements = configurations.maybeCreate(Constants.API_ELEMENTS);
+            var runtimeClasspath = configurations.maybeCreate(Constants.RUNTIME_CLASSPATH);
+            var compileClasspath = configurations.maybeCreate(Constants.COMPILE_CLASSPATH);
+            var runtimeClasspathExposed = configurations.maybeCreate(Constants.RUNTIME_CLASSPATH_EXPOSED);
+            var compileClasspathExposed = configurations.maybeCreate(Constants.COMPILE_CLASSPATH_EXPOSED);
 
-        copyAttributes(runtimeClasspath, runtimeClasspathExposed);
-        runtimeElements.setCanBeConsumed(false);
-        runtimeClasspathExposed.extendsFrom(runtimeClasspath);
-        runtimeClasspathExposed.setCanBeConsumed(true);
-        runtimeClasspathExposed.setCanBeResolved(false);
+            copyAttributes(runtimeClasspath, runtimeClasspathExposed);
+            runtimeElements.setCanBeConsumed(false);
+            runtimeClasspathExposed.extendsFrom(runtimeClasspath);
+            runtimeClasspathExposed.setCanBeConsumed(true);
+            runtimeClasspathExposed.setCanBeResolved(false);
 
-        copyAttributes(compileClasspath, compileClasspathExposed);
-        apiElements.setCanBeConsumed(false);
-        compileClasspathExposed.extendsFrom(compileClasspath);
-        compileClasspathExposed.setCanBeConsumed(true);
-        compileClasspathExposed.setCanBeResolved(false);
+            copyAttributes(compileClasspath, compileClasspathExposed);
+            apiElements.setCanBeConsumed(false);
+            compileClasspathExposed.extendsFrom(compileClasspath);
+            compileClasspathExposed.setCanBeConsumed(true);
+            compileClasspathExposed.setCanBeResolved(false);
+        };
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -547,7 +618,7 @@ public class ProjectSetup {
         );
     }
 
-    private static <T> Action<T> actionOf(Closure<?> closure) {
+    private static <T> IsolatedAction<T> actionOf(Closure<?> closure) {
         return t -> {
             closure.setDelegate(t);
             closure.call(t);
